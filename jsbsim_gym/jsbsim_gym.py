@@ -1,7 +1,14 @@
 import jsbsim
 import gym
-
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Temporary compatibility patch for Gym / Numpy 2.0:
+# Gym <0.28 expects `np.bool8`, which was removed in Numpy 2.0.
+# Create an alias so the type check in passive_env_checker works.
+if not hasattr(np, "bool8"):
+    np.bool8 = np.bool_
+# ---------------------------------------------------------------------------
 
 from .visualization.rendering import Viewer, load_mesh, load_shader, RenderObject, Grid
 from .visualization.quaternion import Quaternion
@@ -90,8 +97,8 @@ class JSBSimEnv(gym.Env):
         super().__init__()
 
         # Set observation and action space format
-        self.observation_space = gym.spaces.Box(STATE_LOW, STATE_HIGH, (15,))
-        self.action_space = gym.spaces.Box(np.array([-1,-1,-1,0]), 1, (4,))
+        self.observation_space = gym.spaces.Box(STATE_LOW.astype(np.float32), STATE_HIGH.astype(np.float32), (15,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(np.array([-1,-1,-1,0], dtype=np.float32), 1.0, (4,), dtype=np.float32)
 
         # Initialize JSBSim
         self.simulation = jsbsim.FGFDMExec(root, None)
@@ -151,7 +158,10 @@ class JSBSimEnv(gym.Env):
             reward = 10
             done = True
         
-        return np.hstack([self.state, self.goal]), reward, done, {}
+        obs = np.hstack([self.state, self.goal]).astype(np.float32)
+        terminated = done
+        truncated = False  # You can add custom truncation logic if desired
+        return obs, reward, terminated, truncated, {}
     
     def _get_state(self):
         # Gather all state properties from JSBSim
@@ -161,7 +171,8 @@ class JSBSimEnv(gym.Env):
         # Rough conversion to meters. This should be fine near zero lat/long
         self.state[:2] *= RADIUS
     
-    def reset(self, seed=None):
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
         # Rerun initial conditions in JSBSim
         self.simulation.run_ic()
         self.simulation.set_property_value('propulsion/set-running', -1)
@@ -179,7 +190,7 @@ class JSBSimEnv(gym.Env):
         # Get state from JSBSim and save to self.state
         self._get_state()
 
-        return np.hstack([self.state, self.goal])
+        return np.hstack([self.state, self.goal]).astype(np.float32), {}
     
     def render(self, mode='human'):
         scale = 1e-3
@@ -257,18 +268,20 @@ class PositionReward(gym.Wrapper):
         self.gain = gain
     
     def step(self, action):
-        obs, reward, done, info = super().step(action)
+        # Unpack Gymnasium-style step return
+        obs, reward, terminated, truncated, info = super().step(action)
         displacement = obs[-3:] - obs[:3]
         distance = np.linalg.norm(displacement)
         reward += self.gain * (self.last_distance - distance)
         self.last_distance = distance
-        return obs, reward, done, info
+        # print(f"Distance: {distance:.2f}, Reward: {reward:.2f}")
+        return obs, reward, terminated, truncated, info
     
-    def reset(self):
-        obs = super().reset()
+    def reset(self, seed=None, options=None):
+        obs, info = super().reset(seed=seed, options=options)
         displacement = obs[-3:] - obs[:3]
         self.last_distance = np.linalg.norm(displacement)
-        return obs
+        return obs, info
 
 # Create entry point to wrapped environment
 def wrap_jsbsim(**kwargs):
