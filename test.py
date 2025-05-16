@@ -10,12 +10,9 @@ policy_kwargs = dict(
     features_extractor_class=JSBSimFeatureExtractor
 )
 
-globals.NAVIGATE = False
-globals.TANKER = True
-
-if NAVIGATE:
+if globals.NAVIGATE:
     env = gym.make("JSBSim-v0")
-elif TANKER:
+elif globals.TANKER:
     env = gym.make("JSBSimTank-v0")
     
 
