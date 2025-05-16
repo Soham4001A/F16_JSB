@@ -164,7 +164,7 @@ class Grid(RenderObject):
         self.draw_mode = mgl.LINES
 
 class Viewer:
-    def __init__(self, width, height, fps=30, headless=False):
+    def __init__(self, width, height, fps=30, headless=True):
         self.transform = Transform()
         self.width = width
         self.height = height
@@ -172,6 +172,11 @@ class Viewer:
 
         if headless:
             self.ctx = mgl.create_standalone_context()
+            self.fbo = self.ctx.framebuffer(
+                color_attachments=[self.ctx.texture((width, height), components=3)],
+                depth_attachment=self.ctx.depth_renderbuffer((width, height)),
+            )
+            self.fbo.use()
             self.display = None
             self.clock = None
         else:
@@ -180,7 +185,7 @@ class Viewer:
             pg.display.gl_set_attribute(pg.GL_CONTEXT_MINOR_VERSION, 3)
             pg.display.gl_set_attribute(pg.GL_MULTISAMPLEBUFFERS, 1)
             pg.display.gl_set_attribute(pg.GL_MULTISAMPLESAMPLES, 3)
-            self.display = pg.display.set_mode((width, height), pg.DOUBLEBUF | pg.OPENGL)
+            # self.display = pg.display.set_mode((width, height), pg.DOUBLEBUF | pg.OPENGL)
             self.ctx = mgl.create_context()
             self.clock = pg.time.Clock()
         
@@ -240,13 +245,15 @@ class Viewer:
         return np.array(bytearray(data)).reshape(self.height, self.width,3)[-1::-1,:,:]
     
     def render(self):
-        pg.event.pump()
+        if self.display is not None:
+            pg.event.pump()
         self.ctx.clear(0.5, 0.5, 0.5, 1.0)
 
         for obj in self.objects:
             obj.render()
 
-        pg.display.flip()
+        if self.display is not None:
+            pg.display.flip()
     
     def close(self):
         pg.quit()
