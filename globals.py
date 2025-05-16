@@ -1,0 +1,2 @@
+NAVIGATE = False
+TANKER = True
