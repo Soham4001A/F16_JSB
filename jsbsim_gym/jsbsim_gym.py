@@ -201,45 +201,53 @@ class JSBSimEnv(gym.Env):
     
     def render(self, mode='human'):
         scale = 1e-3
-        if len(self.obs_buffer) > 0:
-            render_state = self.obs_buffer[-1][:12] 
-        else: 
-            render_state = self.state
+
         if self.viewer is None:
             self.viewer = Viewer(1280, 720)
+
             f16_mesh = load_mesh(self.viewer.ctx, self.viewer.prog, "f16.obj")
             self.f16 = RenderObject(f16_mesh)
             self.f16.transform.scale = 1/30
             self.f16.color = 0, 0, .4
+
             goal_mesh = load_mesh(self.viewer.ctx, self.viewer.prog, "cylinder.obj")
             self.cylinder = RenderObject(goal_mesh)
             self.cylinder.transform.scale = scale * 100
             self.cylinder.color = 0, .4, 0
+
             self.viewer.objects.append(self.f16)
             self.viewer.objects.append(self.cylinder)
             self.viewer.objects.append(Grid(self.viewer.ctx, self.viewer.unlit, 21, 1.))
-        x, y, z = render_state[:3] * scale
+        
+        # Rough conversion from lat/long to meters
+        x, y, z = self.state[:3] * scale
+
         self.f16.transform.z = x 
         self.f16.transform.x = -y
         self.f16.transform.y = z
-        rot = Quaternion.from_euler(*render_state[9:])
+
+        rot = Quaternion.from_euler(*self.state[9:])
         rot = Quaternion(rot.w, -rot.y, -rot.z, rot.x)
         self.f16.transform.rotation = rot
-        goal_x, goal_y, goal_z = self.goal * scale
-        self.cylinder.transform.z = goal_x
-        self.cylinder.transform.x = -goal_y
-        self.cylinder.transform.y = goal_z
+
+        # self.viewer.set_view(-y , z + 1, x - 3, Quaternion.from_euler(np.pi/12, 0, 0, mode=1))
+
+        x, y, z = self.goal * scale
+
+        self.cylinder.transform.z = x
+        self.cylinder.transform.x = -y
+        self.cylinder.transform.y = z
+
         r = self.f16.transform.position - self.cylinder.transform.position
-        r_norm = np.linalg.norm(r)
-        if r_norm > 1e-6: 
-            rhat = r / r_norm
-        else:
-            rhat = np.array([0,0,1]) 
-        cam_x, cam_y, cam_z = r
-        yaw = np.arctan2(-cam_x,-cam_z)
-        pitch = np.arctan2(-cam_y, np.sqrt(cam_x**2 + cam_z**2))
+        rhat = r/np.linalg.norm(r)
+        x,y,z = r
+        yaw = np.arctan2(-x,-z)
+        pitch = np.arctan2(-y, np.sqrt(x**2 + z**2))
+
+
         self.viewer.set_view(*(r + self.cylinder.transform.position + rhat + np.array([0, .33, 0])), Quaternion.from_euler(-pitch, yaw, 0, mode=1))
         self.viewer.render()
+
         if mode == 'rgb_array':
             return self.viewer.get_frame()
     
