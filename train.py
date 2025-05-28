@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import jsbsim_gym.jsbsim_gym 
 from os import path
 from jsbsim_gym.LMA_features import StackedLMAFeaturesExtractor
@@ -144,9 +144,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train SAC or PPO/AM-PPO on JSBSim.")
     parser.add_argument("--algorithm", type=str, default="ppo", choices=["sac", "ppo"], help="RL algorithm to use (sac or ppo)")
     parser.add_argument("--cuda_device", action="store_true", help="Use CUDA if available")
-    parser.add_argument("--total_timesteps", type=int, default=3_000_000)
+    parser.add_argument("--total_timesteps", type=int, default=10_000_000)
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer")
+    parser.add_argument("--learning_rate", type=float, default=9e-5, help="Learning rate for the optimizer")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
 
     # --- SAC specific args (add more as needed, or if they differ significantly from PPO) ---

@@ -15,8 +15,6 @@ from stable_baselines3.common.utils import explained_variance, get_schedule_fn, 
 # For AM-PPO custom optimizer
 try:
     from torch.optim import Adam
-    # Assuming 'optim' directory is structured as in CleanRL relative to where SB3 is,
-    # or 'optim' is in PYTHONPATH. This is a common point of failure when modifying library files.
     from stable_baselines3.ppo.optim.sgd import AlphaGrad, DAG
 except ImportError:
     warnings.warn("AM-PPO custom optimizers (AlphaGrad, DAG) not found. Only Adam will be available for AM-PPO.")
@@ -253,9 +251,6 @@ class PPO(OnPolicyAlgorithm):
 
             # Setup AM-PPO optimizer if specified
             if self.am_ppo_optimizer_name == "adam":
-                # If AM-PPO uses Adam, SB3's default optimizer setup is likely fine,
-                # but policy.optimizer might have been already created by super()._setup_model().
-                # We can re-assign it if needed, or ensure lr is consistent.
                 self.policy.optimizer = Adam(self.policy.parameters(), lr=self.lr_schedule(1), eps=1e-5) # Default Adam eps
                 if self.verbose > 0: print(f"AM-PPO using Adam optimizer with LR: {self.lr_schedule(1)}")
             elif self.am_ppo_optimizer_name == "alphagrad" and AlphaGrad is not None:
@@ -371,9 +366,6 @@ class PPO(OnPolicyAlgorithm):
 
                 # Value loss
                 if self.use_am_ppo:
-                    # AM-PPO CleanRL: mb_target_values = mb_advantages_mod + b_values[mb_inds]
-                    # rollout_data.old_values are V_old(s) from the buffer for this minibatch
-                    # advantages_modulated_mb are A_mod(s) for this minibatch
                     target_values = advantages_modulated_mb + rollout_data.old_values 
                 else:
                     # Standard PPO: uses TD(gae_lambda) target (rollout_data.returns)
@@ -411,21 +403,14 @@ class PPO(OnPolicyAlgorithm):
                 if epoch_raw_advs_mb_means: am_ppo_mean_raw_adv_epoch_list.append(np.mean(epoch_raw_advs_mb_means))
                 if epoch_mod_advs_mb_means: am_ppo_mean_mod_adv_epoch_list.append(np.mean(epoch_mod_advs_mb_means))
 
-            self._n_updates += 1 # This was outside epoch loop in original SB3, but CleanRL implies updates per optim step
+            self._n_updates += 1
             if not continue_training: break
         
-        # self._n_updates was here in SB3, CleanRL logic implies it's per gradient step.
-        # Let's keep SB3's original placement (once per call to train()). Or, if we want it per epoch:
-        # self._n_updates += self.n_epochs # if considering each epoch an "update"
-        # For now, let's assume _n_updates refers to calls to ppo.train() itself.
-        # The _n_updates in SB3 is more like "number of times train() method is called" 
-        # which corresponds to "iterations" in CleanRL.
-
         # Standard PPO Logging
-        explained_var_values_np = self.rollout_buffer.values.flatten() # This is numpy
+        explained_var_values_np = self.rollout_buffer.values.flatten()
         if self.use_am_ppo:
-            all_raw_adv_for_exp_var_np = self.rollout_buffer.advantages.flatten() # This is numpy
-            if all_raw_adv_for_exp_var_np.size > 0: # <--- CHANGED .numel() to .size
+            all_raw_adv_for_exp_var_np = self.rollout_buffer.advantages.flatten()
+            if all_raw_adv_for_exp_var_np.size > 0: 
                 all_raw_adv_for_exp_var_th = th.tensor(all_raw_adv_for_exp_var_np, dtype=th.float32).to(self.device)
                 all_mod_adv_for_exp_var = dynago_transform_advantages(
                     all_raw_adv_for_exp_var_th, self.dynago_params_A_config,
@@ -443,7 +428,7 @@ class PPO(OnPolicyAlgorithm):
         
         # Convert inputs to explained_variance to NumPy arrays
         y_pred_np = th.tensor(explained_var_values_np, dtype=th.float32).cpu().numpy()
-        y_true_np = explained_var_returns.cpu().numpy() # explained_var_returns is already a CPU tensor
+        y_true_np = explained_var_returns.cpu().numpy()
 
         explained_var = explained_variance(
             y_pred_np, # Now a NumPy array
@@ -474,7 +459,7 @@ class PPO(OnPolicyAlgorithm):
         total_timesteps: int,
         callback: MaybeCallback = None,
         log_interval: int = 1,
-        tb_log_name: str = "PPO", # Will be "AM_PPO" if use_am_ppo is True
+        tb_log_name: str = "PPO",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
     ) -> SelfPPO:
