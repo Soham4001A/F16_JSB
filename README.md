@@ -137,37 +137,58 @@ The transformation from an input block $X_{in}$ to the latent representation $Z$
 
 **1. Stage 1: Initial Sequencing & Embedding**
 If the input is a flat vector $X_{raw} \in \mathbb{R}^{B \times N}$, it's reshaped into $L$ chunks of size $C_{in} = N / L$. A shared embedding layer, $\text{EmbedLayer}_1$, maps each chunk $C_{in} \rightarrow d_0$:
-$$ Y = \text{EmbedLayer}_1(\text{Reshape}(X_{raw})) \in \mathbb{R}^{B \times L \times d_0} $$
+```math
+Y = \text{EmbedLayer}_1(\text{Reshape}(X_{raw})) \in \mathbb{R}^{B \times L \times d_0}
+```
 
 **2. Stage 2: Head-View Stacking & Latent Re-Embedding**
    **a. Head-View Stacking:** $Y$ is split along its embedding dimension $d_0$ into $N_h$ segments (heads), each $Y_i \in \mathbb{R}^{B \times L \times d_h}$ where $d_h = d_0 / N_h$. These segments are then concatenated *sequentially* along the sequence dimension:
-   $$ X_{stacked} = \text{Concat}_{\text{axis=1}} (Y_1, Y_2, ..., Y_{N_h}) \in \mathbb{R}^{B \times (L \cdot N_h) \times d_h} $$
+   ```math
+   X_{stacked} = \text{Concat}_{\text{axis=1}} (Y_1, Y_2, ..., Y_{N_h}) \in \mathbb{R}^{B \times (L \cdot N_h) \times d_h}
+   ```
    This creates a longer, thinner intermediate sequence.
 
    **b. Re-Chunking & Latent Embedding:** The stacked tensor $X_{stacked}$ (total features per batch item $L \cdot d_0$) is reshaped into a new sequence of length $L'$, where each new "chunk" has size $C' = (L \cdot d_0) / L'$. A second shared embedding layer, $\text{EmbedLayer}_2$, maps each chunk of size $C'$ to the target latent dimension $d'$:
-   $$ Z = \text{EmbedLayer}_2(\text{Reshape}(\text{Flatten}(X_{stacked}))) \in \mathbb{R}^{B \times L' \times d'} $$
+   ```math
+   Z = \text{EmbedLayer}_2(\text{Reshape}(\text{Flatten}(X_{stacked}))) \in \mathbb{R}^{B \times L' \times d'}
+   ```
    This second embedding stage efficiently compresses the combined head-view information into the final latent space $Z$.
 
 #### LMA Latent Attention Calculation
 Attention operates entirely on the latent representation $Z$. Latent Query ($Q'$), Key ($K'$), and Value ($V'$) are computed via linear projections ($W_{Q'}, W_{K'}, W_{V'}$) from $Z$, mapping $d' \rightarrow d'$ or to a latent head dimension $d'_{head}$:
-$$ Q' = Z W_{Q'}; \quad K' = Z W_{K'}; \quad V' = Z W_{V'} $$
+```math
+Q' = Z W_{Q'}; \quad K' = Z W_{K'}; \quad V' = Z W_{V'}
+```
 Scaled dot-product attention is then applied:
-$$ \text{AttnOut} = \text{softmax}\left( \frac{Q' {K'}^T}{\sqrt{d'_{head}}} \right) V' \in \mathbb{R}^{B \times L' \times d'} $$
+```math
+\text{AttnOut} = \text{softmax}\left( \frac{Q' {K'}^T}{\sqrt{d'_{head}}} \right) V' \in \mathbb{R}^{B \times L' \times d'}
+```
 The $O((L')^2)$ complexity of this step provides the main computational speedup. Due to the sequential head-view stacking, this latent attention can be conceptualized as a form of self-comparison on a meta-representation of the original sequence's features.
 
 #### Integration and Residual Connections in LMA
 LMA utilizes standard Transformer-style residual connections and Layer Normalization. The input $Z$ to the latent attention module serves directly as the input for the first residual sum:
-$$ \text{Out}_1 = \text{LayerNorm}(Z + \text{Dropout}(\text{AttnOut})) $$
+```math
+\text{Out}_1 = \text{LayerNorm}(Z + \text{Dropout}(\text{AttnOut}))
+```
 This is dimensionally consistent without requiring an extra projection for the residual path. This is followed by a Feed-Forward Network (FFN) operating within the latent dimension $d'$, and a second residual connection:
-$$ Z_{out} = \text{LayerNorm}(\text{Out}_1 + \text{Dropout}(\text{FFN}(\text{Out}_1))) $$
+```math
+Z_{out} = \text{LayerNorm}(\text{Out}_1 + \text{Dropout}(\text{FFN}(\text{Out}_1)))
+```
 
 #### LMA Complexity Analysis
 LMA's computational cost (FLOPs), ignoring biases and activations, is roughly:
-$$ O(B (N d_0 + L d_0 d' + 3 L' (d')^2 + 2 (L')^2 d' + 2 L' d' d'_{ffn})) $$
+```math
+O(B (N d_0 + L d_0 d' + 3 L' (d')^2 + 2 (L')^2 d' + 2 L' d' d'_{ffn}))
+```
 This is compared to MHA's:
-$$ O(B (4 L d_0^2 + 2 L^2 d_0 + 2 L d_0 d_{ff})) $$
-LMA achieves significant efficiency gains when $L' \ll L$ and $d' \ll d_0$, as the $L^2 d_0$ term in MHA typically dominates for long sequences. The precise condition for LMA being computationally cheaper is:
-$$ B (N d_0 + L d_0 d') + B (3 L' (d')^2 + 2 (L')^2 d') < B (4 L d_0^2 + 2 L^2 d_0) $$
+```math
+O(B (4 L d_0^2 + 2 L^2 d_0 + 2 L d_0 d_{ff}))
+```
+LMA achieves significant efficiency gains when $L' \ll L$ and $d' \ll d_0$, as the $L^2 d_0$ term in MHA typically dominates for long sequences.
+The precise condition for LMA being computationally cheaper is:
+```math
+B (N d_0 + L d_0 d') + B (3 L' (d')^2 + 2 (L')^2 d') < B (4 L d_0^2 + 2 L^2 d_0)
+```
 (Comparing embedding and attention costs, excluding FFNs for simplicity here).
 
 The LMA feature extractors (`LMAFeaturesExtractor` for general 1D sequential input, and `StackedLMAFeaturesExtractor` for 2D stacked frame input from the environment) are implemented in `jsbsim_gym/LMA_features.py`.
