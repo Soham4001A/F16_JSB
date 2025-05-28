@@ -1,2 +1,2 @@
-NAVIGATE = False
-TANKER = True
+NAVIGATE = True
+TANKER = False
