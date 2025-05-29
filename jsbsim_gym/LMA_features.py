@@ -247,7 +247,7 @@ class LMA_InitialTransform_RL(nn.Module):
         # Concatenate along sequence dimension: (B, L * nh_stack, dk_stack)
         x_stacked_seq = torch.cat(head_views, dim=1) # This was the original LMA logic for sequence stacking
 
-        # The LMA paper also mentions an alternative channel stacking:
+        # The GitHub description mentions an alternative channel stacking:
         # Reshape y to (B, L, nh_stack, dk_stack)
         # y_reshaped_for_channel_stack = y.view(B, L, nh_stack, dk_stack)
         # Transpose to (B, dk_stack, nh_stack, L) -> (B, dk_stack, nh_stack*L) not quite
@@ -257,11 +257,11 @@ class LMA_InitialTransform_RL(nn.Module):
         # effectively making the sequence L*num_heads long, with each token being dk_stack dimensional.
         # x_stacked = x_stacked_seq # Using the sequence stacking from original LMA
 
-        # The current RL implementation seems to do:
+        # The current RL implementation is to do:
         # Split y into chunks along embed_dim (dim=2)
         # head_views = torch.split(y, dk_stack, dim=2) # List of B, L, dk_stack
         # x_stacked = torch.cat(head_views, dim=1) # Concatenates along L -> B, L*num_heads, dk_stack
-        # This interpretation seems consistent with your existing code.
+        # NOTE TO SELF -> Update GitHub ReadME
         x_stacked = x_stacked_seq
 
 
