@@ -246,6 +246,20 @@ This project is a fork and extension of the original JSBSim Gym Environment deve
 
 The F-16 aircraft model and JSBSim flight dynamics simulation software are products of the open-source JSBSim project.
 
+### 📚 Citation
+
+If you use or reference this work in academic or industrial work, please cite this repository:
+
+```bibtex
+@misc{JSBsim2025,
+  author       = {Soham Sane},
+  title        = {JSBSim: Advanced Flight Control Simulation Test Bed for Novel Deep Learning Architectures},
+  howpublished = {\url{https://github.com/Soham4001A/F16_JSB}},
+  year         = {2025},
+  note         = {Test Bed for implementing and testing novel deep learning works in various complex aerospace enviornments.}
+}
+```
+
 ## References
 
 *   Ainslie, J., Lee-Thorp, J., de Jong, M., Zemlyanoy, D., Sanghai, S., & Patrick, S. (2023). GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints. *arXiv preprint arXiv:2305.13245*.
