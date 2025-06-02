@@ -267,111 +267,98 @@ class F16ILSEnv(gym.Env):
         self.successfully_landed = False
 
 
-    def _set_initial_conditions_for_ils(self, rng):
-        print("[ILS DEBUG - WARP TEST] Setting specific ILS initial conditions attempt...")
+    def _set_initial_conditions_for_ils(self, rng): # Renamed from _set_initial_conditions
+        print("[ILS DEBUG - RESET00 STYLE] Setting ICs like reset00.xml...")
 
-        # 1. Set engine running and throttle to encourage start
+        # Engine Start (critical to get N1/N2 up)
         self.simulation.set_property_value('propulsion/set-running', -1)
         self.simulation.set_property_value("propulsion/active_engine", True)
         self.simulation.set_property_value("propulsion/engine/set_running", 1)
-        self.simulation.set_property_value("fcs/throttle-cmd-norm", 0.8) # High throttle for start
+        self.simulation.set_property_value("fcs/throttle-cmd-norm", 0.4) # Ensure decent throttle
+        self.simulation.set_property_value("propulsion/engine/n2", 65.0) # Try explicitly setting N2 to a bit above idle
+                                                                    # Based on F100-PW-229's <idlen2>60.0</idlen2>
 
-        # 2. Set a BASIC set of ICs that JSBSim *seems* to accept (like altitude, maybe heading)
-        #    Let JSBSim default the lat/lon for this run_ic()
-        self.simulation.set_property_value('ic/h-sl-ft', (self.runway_alt_m * METERS_TO_FEET) + 3000.0)
-        self.simulation.set_property_value('ic/psi-true-deg', self.runway_hdg_rad * RADIANS_TO_DEGREES)
-        self.simulation.set_property_value('ic/u-fps', 10.0) # Minimal forward speed
+        # Brakes off
+        self.simulation.set_property_value("fcs/brake-parking-cmd-norm", 0.0)
+        self.simulation.set_property_value("fcs/center-brake-cmd-norm", 0.0)
+        self.simulation.set_property_value("fcs/left-brake-cmd-norm", 0.0)
+        self.simulation.set_property_value("fcs/right-brake-cmd-norm", 0.0)
+
+
+        # Speeds (set to a small u-fps to overcome static friction)
+        self.simulation.set_property_value('ic/u-fps', 10.0) # Small forward nudge
+        self.simulation.set_property_value('ic/v-fps', 0.0)
+        self.simulation.set_property_value('ic/w-fps', 0.0)
+        # vias-kts will be calculated, but setting a target can sometimes help guide the IC
         self.simulation.set_property_value('ic/vias-kts', 5.0)
 
 
-        print("[ILS DEBUG - WARP TEST] Running a generic run_ic() first...")
+        # Position (still attempting to set desired ILS start)
+        target_lat_deg = self.runway_lat_rad * RADIANS_TO_DEGREES # Simplified for this test
+        target_lon_deg = self.runway_lon_rad * RADIANS_TO_DEGREES # e.g., -118.0
+        target_alt_ft = self.runway_alt_m * METERS_TO_FEET + 10.0 # On ground for this test
+
+        print(f"[ILS DEBUG - ENGINE/BRAKE TEST] Attempting: lat={target_lat_deg:.2f}, lon={target_lon_deg:.2f}, alt={target_alt_ft:.1f}")
+        self.simulation.set_property_value('ic/lat-geod-deg', target_lat_deg)
+        self.simulation.set_property_value('ic/lon-geod-deg', target_lon_deg)
+        self.simulation.set_property_value('ic/h-sl-ft', target_alt_ft)
+
+        # Orientation
+        self.simulation.set_property_value('ic/phi-deg', 0.0)
+        self.simulation.set_property_value('ic/theta-deg', 0.0) 
+        self.simulation.set_property_value('ic/psi-true-deg', self.runway_hdg_rad * RADIANS_TO_DEGREES)
+
+        self.simulation.set_property_value("fcs/flap-cmd-norm", 0.0) # Flaps up for ground test
+        self.simulation.set_property_value("gear/gear-cmd-norm", 1.0) # Gear down
+        self.simulation.set_property_value("fcs/speedbrake-cmd-norm", 0.0)
+
+
+        print("[ILS DEBUG - ENGINE/BRAKE TEST] Running run_ic()...")
         if not self.simulation.run_ic():
-            print("[ILS DEBUG ERROR - WARP TEST] JSBSim generic run_ic() failed.")
-        
-        # Run a few steps to let engine attempt to initialize based on above
-        # Try to get N2 up by explicitly setting it if possible, or just hope throttle works
-        # This is a GUESS for N2 property, CHECK F100-PW-229.xml for how to command N2/idle
-        # self.simulation.set_property_value("propulsion/engine/n2_cmd_norm", 0.65) # Command idle N2
-        # self.simulation.set_property_value("propulsion/engine/fuel_required_norm", 0.1) # Some fuel flow command
+            print("[ILS DEBUG ERROR - ENGINE/BRAKE TEST] run_ic() failed.")
 
-        print("[ILS DEBUG - WARP TEST] Short stabilization after generic run_ic...")
-        for _ in range(30): # Give it a little time
+        print("[ILS DEBUG - ENGINE/BRAKE TEST] Stabilization loop...")
+        for i in range(60): 
             self.simulation.run()
-
-        # --- NOW, ATTEMPT TO WARP THE AIRCRAFT ---
-        print("[ILS DEBUG - WARP TEST] Attempting to WARP aircraft to target state...")
-
-        # Target state calculations (copied from your previous version)
-        start_dist_nm = rng.uniform(10.0, 15.0)
-        start_dist_m = start_dist_nm * NM_TO_METERS
-        dx_centerline = start_dist_m * math.sin(self.runway_hdg_rad)
-        dy_centerline = start_dist_m * math.cos(self.runway_hdg_rad)
-        lateral_offset_nm = rng.uniform(-0.5, 0.5)
-        lateral_offset_m = lateral_offset_nm * NM_TO_METERS
-        dx_offset = lateral_offset_m * math.cos(self.runway_hdg_rad)
-        dy_offset = -lateral_offset_m * math.sin(self.runway_hdg_rad)
-        target_lon_rad = self.runway_lon_rad + (dx_centerline + dx_offset) / (EARTH_RADIUS_METERS * math.cos(self.runway_lat_rad))
-        target_lat_rad = self.runway_lat_rad + (dy_centerline + dy_offset) / EARTH_RADIUS_METERS
-        height_on_gs_above_threshold_m = math.tan(self.glideslope_rad) * start_dist_m
-        gs_alt_at_start_msl_m = self.runway_alt_m + height_on_gs_above_threshold_m
-        target_alt_msl_ft = gs_alt_at_start_msl_m * METERS_TO_FEET
-        target_alt_msl_ft = max(target_alt_msl_ft, self.runway_alt_m * METERS_TO_FEET + 1000)
-        target_ias_kts = self.target_approach_ias_kts + rng.uniform(-5, 5)
-        target_u_fps = target_ias_kts * 1.68781
-        target_heading_deg = (self.runway_hdg_rad * RADIANS_TO_DEGREES) + rng.uniform(-10,10)
-        target_heading_deg = target_heading_deg % 360.0
-
-        # Directly set STATE properties (not 'ic/' properties)
-        print(f"[ILS DEBUG - WARP TEST] Setting STATE: lat={target_lat_rad * RADIANS_TO_DEGREES:.4f}, "
-            f"lon={target_lon_rad * RADIANS_TO_DEGREES:.4f}, alt={target_alt_msl_ft:.1f}")
-        self.simulation.set_property_value('position/lat-geod-rad', target_lat_rad)
-        self.simulation.set_property_value('position/lon-geod-rad', target_lon_rad) # Try geodetic for output consistency
-        self.simulation.set_property_value('position/h-sl-ft', target_alt_msl_ft)
-
-        print(f"[ILS DEBUG - WARP TEST] Setting STATE: u-fps={target_u_fps:.1f}, vias-kts={target_ias_kts:.1f}")
-        self.simulation.set_property_value('velocities/u-fps', target_u_fps)
-        self.simulation.set_property_value('velocities/v-fps', 0.0)
-        self.simulation.set_property_value('velocities/w-fps', 0.0)
-        # Setting vias-kts directly might not work, it's usually calculated. u-fps is more fundamental.
-
-        print(f"[ILS DEBUG - WARP TEST] Setting STATE: psi-rad={target_heading_deg * DEGREES_TO_RADIANS:.4f}")
-        self.simulation.set_property_value('attitude/psi-rad', target_heading_deg * DEGREES_TO_RADIANS)
-        self.simulation.set_property_value('attitude/phi-rad', 0.0)
-        self.simulation.set_property_value('attitude/theta-rad', 0.0) # Target 0 pitch attitude for warp
-
-        # Set gear and flaps (these are usually direct state changes)
-        self.simulation.set_property_value("fcs/flap-cmd-norm", 1.0) # Commands flap system
-        self.simulation.set_property_value("gear/gear-cmd-norm", 1.0) # Commands gear system
-        # To be more direct (might be needed if FCS commands don't take effect instantly):
-        # self.simulation.set_property_value("surface-positions/flap-pos-norm", 1.0)
-        # self.simulation.set_property_value("gear/gear-pos-norm", 1.0)
+            if i % 10 == 0:
+                ias = self.simulation.get_property_value("velocities/vias-kts")
+                n1 = self.simulation.get_property_value("propulsion/engine/n1")
+                n2 = self.simulation.get_property_value("propulsion/engine/n2")
+                thrust = self.simulation.get_property_value("propulsion/engine/thrust-lbs")
+                lon_check = self.simulation.get_property_value("position/lon-geoc-rad") * RADIANS_TO_DEGREES
+                print(f"[ILS DEBUG] Stab step {i}: IAS={ias:.1f}, N1={n1:.1f}, N2={n2:.1f}, Thrust={thrust:.1f}, Lon={lon_check:.4f}")
 
 
-        # Run a few steps to see if the warp "sticks"
-        print("[ILS DEBUG - WARP TEST] Running a few steps after warp...")
-        for _ in range(5):
-            self.simulation.run()
-
-        # --- VERIFY JSBSIM STATE IMMEDIATELY AFTER WARP ---
+        # --- VERIFY ---
+        # (Same verification prints as before)
         current_raw_state_after_ic = self._get_raw_jsbsim_state()
-        # (Your existing verification debug prints)
         actual_lat_deg = current_raw_state_after_ic[IDX_LAT_RAD] * RADIANS_TO_DEGREES
-        actual_lon_deg = current_raw_state_after_ic[IDX_LON_RAD] * RADIANS_TO_DEGREES # Check this!
-        actual_alt_ft = current_raw_state_after_ic[IDX_ALT_MSL_FT]
-        actual_ias_kts = current_raw_state_after_ic[IDX_VIAS_KTS] # Check this!
-        actual_alpha_deg = current_raw_state_after_ic[IDX_AOA_DEG]
-        actual_psi_deg = current_raw_state_after_ic[IDX_HEADING_RAD] * RADIANS_TO_DEGREES
-        try:
-            thrust_lbs = self.simulation.get_property_value("propulsion/engine/thrust-lbs")
-            rpm_n1_ils = self.simulation.get_property_value("propulsion/engine/n1")
-            rpm_n2_ils = self.simulation.get_property_value("propulsion/engine/n2")
-        except: thrust_lbs, rpm_n1_ils, rpm_n2_ils = "N/A", "N/A", "N/A"
-        print(f"[ILS DEBUG - WARP TEST] Actual state after WARP: lat={actual_lat_deg:.4f}, lon={actual_lon_deg:.4f}, "
-            f"alt_ft={actual_alt_ft:.1f}, ias_kts={actual_ias_kts:.1f}, alpha={actual_alpha_deg:.1f}, heading={actual_psi_deg:.1f}, "
-            f"N1={rpm_n1_ils}, N2={rpm_n2_ils}, Thrust={thrust_lbs}")
-        east_m, north_m, _ = geodetic_to_enu( actual_lat_deg * DEGREES_TO_RADIANS, actual_lon_deg * DEGREES_TO_RADIANS, actual_alt_ft * FEET_TO_METERS, self.runway_lat_rad, self.runway_lon_rad, self.runway_alt_m)
-        actual_dist_to_thresh_nm = math.sqrt(east_m**2 + north_m**2) * METERS_TO_NM
-        print(f"[ILS DEBUG - WARP TEST] Actual distance to threshold after WARP: {actual_dist_to_thresh_nm:.2f} NM")
+        actual_lon_deg = current_raw_state_after_ic[IDX_LON_RAD] * RADIANS_TO_DEGREES # This is crucial
+        # ... rest of verification ...
+        print(f"[ILS DEBUG - RESET00 STYLE] Actual state: lat={actual_lat_deg:.4f}, lon={actual_lon_deg:.4f} ...")
+        # ... print distance ...
+
+        # IF THIS STILL FAILS (lon=0, ias=0):
+        # The issue is deeply rooted in this F-16 model's interaction with Python API's IC setting.
+        # The fact that NavEnv *doesn't* set lat/lon and it works is the biggest clue.
+        # It means NavEnv is using JSBSim's default positioning for that F-16,
+        # which likely comes from an internal default in f16.xml or an associated file
+        # that correctly sets a non-zero longitude.
+
+        # If after this, lon is still 0.0:
+        # The next step would be to accept JSBSim's default starting position (by *not* setting ic/lat or ic/lon)
+        # and then make your RL agent fly from that default starting point to your ILS intercept.
+        # This means:
+        # 1. In _set_initial_conditions_for_ils:
+        #    - DO NOT set 'ic/lat-geod-deg' or 'ic/lon-geod-deg'.
+        #    - DO set 'ic/h-sl-ft' to your desired starting altitude for the ILS INTERCEPT (e.g., 3000ft AGL near the start of the localizer).
+        #    - DO set 'ic/u-fps' to your desired approach speed.
+        #    - DO set 'ic/psi-true-deg' to roughly align with the runway.
+        #    - Engine running, flaps, gear.
+        # 2. Then `run_ic()`.
+        # 3. JSBSim will place you at its default Lat/Lon but hopefully at your specified Alt/Speed/Heading.
+        # 4. Your observation space's distance_to_threshold_nm etc. will be large initially.
+        # 5. Your agent learns to navigate from there. This is harder but might be unavoidable if direct positioning fails.
 
     def _get_raw_jsbsim_state(self) -> np.ndarray:
         """Reads the defined properties from JSBSim."""
