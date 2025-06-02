@@ -235,57 +235,109 @@ class F16ILSEnv(gym.Env):
 
     def _set_initial_conditions(self, rng):
         """Sets F-16 to an ILS intercept position."""
-        self.simulation.set_property_value('propulsion/set-running', -1) # Engines on
+        print("[DEBUG] Setting initial conditions...")
 
-        # Start 10-15 NM out, established or intercepting localizer, below glideslope
+        self.simulation.set_property_value('propulsion/set-running', -1)
+        self.simulation.set_property_value("propulsion/active_engine", True)
+        self.simulation.set_property_value("propulsion/engine/set_running", 1) # For engine 0
+        # If your F-16 has multiple engines, you might need to specify for each, e.g. propulsion/engine[0]/set_running
+
         start_dist_nm = rng.uniform(10.0, 15.0)
         start_dist_m = start_dist_nm * NM_TO_METERS
+        print(f"[DEBUG] Desired start_dist_nm: {start_dist_nm:.2f}")
 
-        # Lateral offset: +/- 0 to 1 NM from centerline, or an intercept angle
-        lateral_offset_nm = rng.uniform(-0.5, 0.5) # Offset in NM
+        lateral_offset_nm = rng.uniform(-0.5, 0.5)
         lateral_offset_m = lateral_offset_nm * NM_TO_METERS
 
-        # Calculate start lat/lon based on runway threshold, heading, start_dist, lateral_offset
-        # (Simplified: assumes flat earth for this offset calculation)
-        # Position along extended centerline
-        dx_centerline = start_dist_m * np.sin(self.runway_hdg_rad) # East
-        dy_centerline = start_dist_m * np.cos(self.runway_hdg_rad) # North
-        # Add lateral offset (perpendicular to runway heading)
-        dx_offset = lateral_offset_m * np.cos(self.runway_hdg_rad)
-        dy_offset = -lateral_offset_m * np.sin(self.runway_hdg_rad)
+        dx_centerline = start_dist_m * math.sin(self.runway_hdg_rad)
+        dy_centerline = start_dist_m * math.cos(self.runway_hdg_rad)
+        dx_offset = lateral_offset_m * math.cos(self.runway_hdg_rad)
+        dy_offset = -lateral_offset_m * math.sin(self.runway_hdg_rad)
 
-        start_lon_rad = self.runway_lon_rad + (dx_centerline + dx_offset) / (EARTH_RADIUS_METERS * np.cos(self.runway_lat_rad))
-        start_lat_rad = self.runway_lat_rad + (dy_centerline + dy_offset) / EARTH_RADIUS_METERS
+        start_lon_rad_calc = self.runway_lon_rad + (dx_centerline + dx_offset) / (EARTH_RADIUS_METERS * math.cos(self.runway_lat_rad))
+        start_lat_rad_calc = self.runway_lat_rad + (dy_centerline + dy_offset) / EARTH_RADIUS_METERS
+        
+        height_on_gs_above_threshold_m = math.tan(self.glideslope_rad) * start_dist_m
+        gs_alt_at_start_msl_m = self.runway_alt_m + height_on_gs_above_threshold_m
+        gs_alt_at_start_msl_ft = gs_alt_at_start_msl_m * METERS_TO_FEET
 
-        # Altitude: Intercept glideslope from below.
-        # Altitude of glideslope at start_dist_nm from threshold:
-        gs_alt_at_start_ft = self.runway_alt_m + np.tan(self.glideslope_rad) * start_dist_m * METERS_TO_FEET
-        initial_alt_msl_ft = rng.uniform(gs_alt_at_start_ft - 500, gs_alt_at_start_ft - 200) # e.g. 200-500ft below GS
-        initial_alt_msl_ft = max(initial_alt_msl_ft, self.runway_alt_m + 1500) # Ensure min reasonable altitude
+        initial_alt_msl_ft_calc = rng.uniform(gs_alt_at_start_msl_ft - 500, gs_alt_at_start_msl_ft - 200)
+        initial_alt_msl_ft_calc = max(initial_alt_msl_ft_calc, self.runway_alt_m * METERS_TO_FEET + 1000)
 
-        self.simulation.set_property_value('ic/lat-geod-deg', start_lat_rad * RADIANS_TO_DEGREES)
-        self.simulation.set_property_value('ic/long-gc-deg', start_lon_rad * RADIANS_TO_DEGREES) # JSBSim uses geocentric longitude for ic
-        self.simulation.set_property_value('ic/h-sl-ft', initial_alt_msl_ft)
-        self.simulation.set_property_value('ic/psi-true-deg', self.runway_hdg_rad) # Initial heading towards runway
-        self.simulation.set_property_value('ic/vias-kts', self.target_approach_ias_kts + rng.uniform(-5, 5)) # IAS
-        self.simulation.set_property_value('ic/gamma-deg', 0) # Initial flight path angle
-        self.simulation.set_property_value('ic/phi-deg', 0)   # Wings level
+        target_ias_for_ic_kts = self.target_approach_ias_kts + rng.uniform(-5, 5)
+        initial_u_fps = target_ias_for_ic_kts * 1.68781 
 
-        # Set landing configuration
-        self.simulation.set_property_value("fcs/flap-cmd-norm", 1.0)  # Full flaps (check F-16 specific property)
-        self.simulation.set_property_value("gear/gear-cmd-norm", 1.0) # Gear down
-        self.simulation.set_property_value("fcs/speedbrake-cmd-norm", 0.0) # Speedbrakes off
+        initial_heading_for_ic_deg = (self.runway_hdg_rad * RADIANS_TO_DEGREES) + rng.uniform(-10,10)
+        initial_heading_for_ic_deg = initial_heading_for_ic_deg % 360.0
 
-        # Initial throttle to maintain speed (approximate)
-        self.simulation.set_property_value("fcs/throttle-cmd-norm", 0.4 + rng.uniform(-0.05, 0.05))
 
-        # Ensure simulation applies ICs
+        # --- SETTING JSBSIM IC PROPERTIES ---
+        print(f"[DEBUG] Attempting to set ICs: lat={start_lat_rad_calc * RADIANS_TO_DEGREES:.4f}, "
+              f"lon={start_lon_rad_calc * RADIANS_TO_DEGREES:.4f}, alt_ft={initial_alt_msl_ft_calc:.1f}, "
+              f"u_fps={initial_u_fps:.1f}, vias_kts={target_ias_for_ic_kts:.1f}, "
+              f"heading_ic_deg={initial_heading_for_ic_deg:.1f}")
+
+        # Position - TRYING ic/lon-geod-deg
+        self.simulation.set_property_value('ic/lat-geod-deg', start_lat_rad_calc * RADIANS_TO_DEGREES)
+        self.simulation.set_property_value('ic/lon-geod-deg', start_lon_rad_calc * RADIANS_TO_DEGREES) # CHANGED HERE
+        self.simulation.set_property_value('ic/h-sl-ft', initial_alt_msl_ft_calc)
+        
+        # Orientation
+        self.simulation.set_property_value('ic/psi-true-deg', initial_heading_for_ic_deg)
+        self.simulation.set_property_value('ic/phi-deg', 0.0 + rng.uniform(-5,5))
+        self.simulation.set_property_value('ic/theta-deg', 0.0) # Initial pitch attitude
+
+        # Velocities
+        self.simulation.set_property_value('ic/u-fps', initial_u_fps)
+        self.simulation.set_property_value('ic/v-fps', 0.0)          
+        self.simulation.set_property_value('ic/w-fps', 0.0)          
+        self.simulation.set_property_value('ic/vias-kts', target_ias_for_ic_kts) # Keep this as well
+
+        # Configuration
+        self.simulation.set_property_value("fcs/flap-cmd-norm", 1.0)
+        self.simulation.set_property_value("gear/gear-cmd-norm", 1.0)
+        self.simulation.set_property_value("fcs/speedbrake-cmd-norm", 0.0)
+        self.simulation.set_property_value("fcs/throttle-cmd-norm", 0.6 + rng.uniform(-0.05, 0.05)) # Slightly higher throttle, more consistently
+
         if not self.simulation.run_ic():
-            raise RuntimeError("JSBSim failed to apply initial conditions.")
+            print("[ERROR] JSBSim run_ic() failed. The simulation state might be undefined.")
+            # Consider raising an error or handling this more robustly
+            # For now, we proceed to see what state is reported.
 
-        # Let sim stabilize for a moment
-        for _ in range(10): # Run a few internal steps
+        for _ in range(5): 
             self.simulation.run()
+
+        # --- VERIFY JSBSIM STATE IMMEDIATELY AFTER IC ---
+        current_raw_state_after_ic = self._get_raw_jsbsim_state()
+        actual_lat_deg = current_raw_state_after_ic[IDX_LAT_RAD] * RADIANS_TO_DEGREES
+        actual_lon_deg = current_raw_state_after_ic[IDX_LON_RAD] * RADIANS_TO_DEGREES
+        actual_alt_ft = current_raw_state_after_ic[IDX_ALT_MSL_FT]
+        actual_ias_kts = current_raw_state_after_ic[IDX_VIAS_KTS]
+        actual_alpha_deg = current_raw_state_after_ic[IDX_AOA_DEG]
+        actual_psi_deg = current_raw_state_after_ic[IDX_HEADING_RAD] * RADIANS_TO_DEGREES
+        
+        # Try to get engine thrust and RPM
+        try:
+            thrust_lbs = self.simulation.get_property_value("propulsion/engine/thrust-lbs") # Or propulsion/total-thrust-lbs
+            rpm = self.simulation.get_property_value("propulsion/engine/rpm")
+        except: # Handle if properties don't exist for this specific model config
+            thrust_lbs = "N/A"
+            rpm = "N/A"
+
+        print(f"[DEBUG] JSBSim actual state after IC run: lat={actual_lat_deg:.4f}, lon={actual_lon_deg:.4f}, "
+              f"alt_ft={actual_alt_ft:.1f}, ias_kts={actual_ias_kts:.1f}, alpha={actual_alpha_deg:.1f}, heading={actual_psi_deg:.1f}, "
+              f"thrust_lbs={thrust_lbs}, rpm={rpm}")
+
+        east_m, north_m, _ = geodetic_to_enu(
+            actual_lat_deg * DEGREES_TO_RADIANS, actual_lon_deg * DEGREES_TO_RADIANS, actual_alt_ft * FEET_TO_METERS,
+            self.runway_lat_rad, self.runway_lon_rad, self.runway_alt_m
+        )
+        actual_dist_to_thresh_m_2d = math.sqrt(east_m**2 + north_m**2)
+        actual_dist_to_thresh_nm = actual_dist_to_thresh_m_2d * METERS_TO_NM
+        print(f"[DEBUG] Actual distance to threshold after IC: {actual_dist_to_thresh_nm:.2f} NM")
+
+        if current_raw_state_after_ic[IDX_ALT_AGL_FT] < 0:
+            print(f"[WARNING] Initial AGL is negative: {current_raw_state_after_ic[IDX_ALT_AGL_FT]:.1f} ft. Check altitude settings.")
 
     def _get_raw_jsbsim_state(self) -> np.ndarray:
         """Reads the defined properties from JSBSim."""
