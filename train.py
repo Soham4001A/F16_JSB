@@ -1,5 +1,5 @@
-import gym #TESTING OLD GYM FOR RENDERING
-#import gymnasium as gym
+#import gym #TESTING OLD GYM FOR RENDERING
+import gymnasium as gym
 import jsbsim_gym.nav_env 
 from os import path
 from jsbsim_gym.features.LMA_features import StackedLMAFeaturesExtractor

@@ -1,4 +1,5 @@
 import gymnasium as gym
+#import gym
 import jsbsim_gym.ils_env # This will run the gym.register in f16_ils_env.py
 from jsbsim_gym.features.ils_features import StackedLMA_ILS_FeaturesExtractor # Corrected import
 
@@ -36,9 +37,7 @@ def main(args_cli):
 
     # Create the environment using the new env_id
     print(f"Creating environment with ID: {args_cli.env_id}")
-    env = gym.make(args_cli.env_id, 
-                   render_mode=args_cli.render_mode if args_cli.render_mode else None # Pass render_mode
-                  )
+    env = gym.make(args_cli.env_id)
     print(f"Environment observation space: {env.observation_space.shape}")
     print(f"Environment action space: {env.action_space.shape}")
     

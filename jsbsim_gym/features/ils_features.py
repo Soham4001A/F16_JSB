@@ -6,8 +6,9 @@ import math
 from dataclasses import dataclass, field
 from typing import Type
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from gym import spaces as gymnasium_spaces #TESTING OLD GYM FOR RENDERING
-#from gymnasium import spaces as gymnasium_spaces
+#from gym import spaces as gymnasium_spaces #TESTING OLD GYM FOR RENDERING
+from gymnasium.spaces import Box as GymnasiumBox
+from gymnasium import spaces as gymnasium_spaces
 
 # Assuming f16_ils_env.py defines these, or define them here for clarity if needed
 # from f16_ils_env import OBS_FEATURE_NAMES, NUM_OBS_FEATURES (if you want to import)
@@ -270,7 +271,7 @@ class StackedLMA_ILS_FeaturesExtractor(BaseFeaturesExtractor):
                  lma_dropout: float = 0.1,
                  lma_bias: bool = True):
 
-        assert isinstance(observation_space, gymnasium_spaces.Box), \
+        assert isinstance(observation_space, GymnasiumBox), \
             f"Expected gymnasium.spaces.Box, got {type(observation_space)}"
         assert len(observation_space.shape) == 2, \
             "Observation space for StackedLMA_ILS_FeaturesExtractor must be 2D"

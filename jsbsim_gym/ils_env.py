@@ -1,6 +1,7 @@
 import jsbsim
-import gym #TESTING OLD GYM FOR RENDERING
-#import gymnasium as gym
+#import gym #TESTING OLD GYM FOR RENDERING
+import gymnasium
+import gymnasium as gym
 import numpy as np
 import collections
 import math
@@ -258,14 +259,14 @@ class F16ILSEnv(gym.Env):
 
         # Altitude: Intercept glideslope from below.
         # Altitude of glideslope at start_dist_nm from threshold:
-        gs_alt_at_start_ft = self.runway_alt_ft + np.tan(self.glideslope_rad) * start_dist_m * METERS_TO_FEET
+        gs_alt_at_start_ft = self.runway_alt_m + np.tan(self.glideslope_rad) * start_dist_m * METERS_TO_FEET
         initial_alt_msl_ft = rng.uniform(gs_alt_at_start_ft - 500, gs_alt_at_start_ft - 200) # e.g. 200-500ft below GS
-        initial_alt_msl_ft = max(initial_alt_msl_ft, self.runway_alt_ft + 1500) # Ensure min reasonable altitude
+        initial_alt_msl_ft = max(initial_alt_msl_ft, self.runway_alt_m + 1500) # Ensure min reasonable altitude
 
         self.simulation.set_property_value('ic/lat-geod-deg', start_lat_rad * RADIANS_TO_DEGREES)
         self.simulation.set_property_value('ic/long-gc-deg', start_lon_rad * RADIANS_TO_DEGREES) # JSBSim uses geocentric longitude for ic
         self.simulation.set_property_value('ic/h-sl-ft', initial_alt_msl_ft)
-        self.simulation.set_property_value('ic/psi-true-deg', self.runway_hdg_deg) # Initial heading towards runway
+        self.simulation.set_property_value('ic/psi-true-deg', self.runway_hdg_rad) # Initial heading towards runway
         self.simulation.set_property_value('ic/vias-kts', self.target_approach_ias_kts + rng.uniform(-5, 5)) # IAS
         self.simulation.set_property_value('ic/gamma-deg', 0) # Initial flight path angle
         self.simulation.set_property_value('ic/phi-deg', 0)   # Wings level
@@ -384,17 +385,20 @@ class F16ILSEnv(gym.Env):
         obs_features = np.array([
             delta_loc_deg,
             delta_gs_deg,
-            current_ias_kts - self.target_approach_ias_kts,
-            raw_state[IDX_VS_FPS],
-            normalize_angle_mpi_pi(raw_state[IDX_PITCH_RAD]),
-            normalize_angle_mpi_pi(raw_state[IDX_ROLL_RAD]),
-            heading_error_rad,
-            raw_state[IDX_ALT_AGL_FT],
-            raw_state[IDX_AOA_DEG],
-            raw_state[IDX_PITCH_RATE_RAD_S],
-            raw_state[IDX_ROLL_RATE_RAD_S],
-            dist_to_thresh_nm
+            current_ias_kts - self.target_approach_ias_kts, # airspeed_error_kts
+            raw_state[IDX_VS_FPS],                          # vertical_speed_fps
+            normalize_angle_mpi_pi(raw_state[IDX_PITCH_RAD]), # pitch_angle_rad
+            normalize_angle_mpi_pi(raw_state[IDX_ROLL_RAD]),  # roll_angle_rad
+            heading_error_rad,                              # heading_error_rad
+            raw_state[IDX_ALT_AGL_FT],                      # altitude_agl_ft
+            raw_state[IDX_AOA_DEG],                         # alpha_deg
+            raw_state[IDX_PITCH_RATE_RAD_S],                # pitch_rate_rad_s
+            raw_state[IDX_ROLL_RATE_RAD_S],                 # roll_rate_rad_s
+            dist_to_thresh_nm                               # distance_to_threshold_nm
         ], dtype=np.float32)
+        
+        assert len(obs_features) == NUM_OBS_FEATURES, \
+            f"Mismatch: _get_observation produced {len(obs_features)} features, expected {NUM_OBS_FEATURES}"
 
         # Clip observation to defined bounds (helps with stability if some values go wild)
         # return np.clip(obs_features, OBS_LOW, OBS_HIGH)
@@ -652,21 +656,16 @@ class F16ILSEnv(gym.Env):
         self.last_action = action # Store for potential reward shaping (control effort)
 
         # Apply action to JSBSim
-        # Action: [aileron, elevator, rudder, throttle]
         self.simulation.set_property_value("fcs/aileron-cmd-norm", float(action[0]))
         self.simulation.set_property_value("fcs/elevator-cmd-norm", float(action[1]))
         self.simulation.set_property_value("fcs/rudder-cmd-norm", float(action[2]))
         self.simulation.set_property_value("fcs/throttle-cmd-norm", float(action[3]))
 
-        # Run JSBSim for multiple internal steps
         for _ in range(self.down_sample):
             self.simulation.run()
-            # Critical: Update gear status *after each internal JSBSim step* if a precise touchdown time is needed
-            # For simplicity here, we update it once per environment step based on the state *after* downsampling.
-            # This might make touchdown timing slightly less precise but is computationally cheaper.
 
         raw_state = self._get_raw_jsbsim_state()
-        self._update_landing_gear_status(raw_state) # Update based on latest state
+        self._update_landing_gear_status(raw_state)
         current_single_obs_features = self._get_observation(raw_state)
         self.obs_buffer.append(current_single_obs_features)
         stacked_obs = np.array(self.obs_buffer, dtype=np.float32)
@@ -674,52 +673,80 @@ class F16ILSEnv(gym.Env):
         reward = self._calculate_reward(raw_state, current_single_obs_features)
         terminated, truncated, info = self._check_termination_truncation(raw_state, current_single_obs_features)
 
-        # Add large bonus/penalty based on final outcome
         if terminated:
             if info.get('success', False):
-                reward += 500.0 # Large success bonus
+                reward += 500.0
             else:
-                reward -= 200.0 # Large failure penalty (on top of any per-step penalties)
+                reward -= 200.0
         elif truncated:
-            reward -= 100.0 # Penalty for running out of time without success
+            reward -= 100.0
 
-
-        # Ensure observation is within bounds (optional, for debugging during development)
-        # if not self.observation_space.contains(stacked_obs):
-        #     print("Warning: Stacked observation is outside defined space bounds.")
-            # For debugging:
-            # for i in range(self.num_stacked_frames):
-            #     for j in range(NUM_OBS_FEATURES):
-            #         low = self.observation_space.low[i,j]
-            #         high = self.observation_space.high[i,j]
-            #         val = stacked_obs[i,j]
-            #         if not (low <= val <= high):
-            #             print(f"Frame {i}, Feature {OBS_FEATURE_NAMES[j]} ('{val}') out of bound [{low}, {high}]")
-            # raise ValueError("Observation outside defined space.")
+        # --- BEGIN DEBUGGING BLOCK FOR STEP OBSERVATION SPACE ---
+        # Ensure self.observation_space is defined in __init__
+        if not self.observation_space.contains(stacked_obs):
+            print(f"ERROR IN STEP ({self.current_step_in_episode}): Observation is NOT within the defined observation space!")
+            for i in range(self.num_stacked_frames): # Or NUM_STACKED_FRAMES if global
+                frame = stacked_obs[i]
+                # Assuming OBS_LOW, OBS_HIGH are defined globally or as self.OBS_LOW, self.OBS_HIGH
+                # And OBS_FEATURE_NAMES is also accessible
+                single_frame_space = gymnasium.spaces.Box(OBS_LOW, OBS_HIGH, dtype=np.float32)
+                if not single_frame_space.contains(frame):
+                    print(f"  Problem in stacked frame {i} (latest in buffer is frame {self.num_stacked_frames-1}):")
+                    for j, feature_name in enumerate(OBS_FEATURE_NAMES):
+                        val = frame[j]
+                        low = OBS_LOW[j]
+                        high = OBS_HIGH[j]
+                        if not (low <= val <= high):
+                            print(f"    Feature '{feature_name}' (idx {j}) value: {val:.4f} is OUT OF BOUNDS [{low:.4f}, {high:.4f}]")
+            # Uncomment to stop execution immediately when an out-of-bounds observation is detected in step
+            # raise ValueError(f"Observation from step() at step {self.current_step_in_episode} is not within observation_space.")
+        # --- END DEBUGGING BLOCK FOR STEP OBSERVATION SPACE ---
 
         return stacked_obs, reward, terminated, truncated, info
 
     def reset(self, seed: int = None, options: dict = None):
-        super().reset(seed=seed) # Essential for Gymnasium to handle seeding
-        rng = self.np_random # Use the seeded RNG from Gymnasium
+        super().reset(seed=seed)
+        rng = self.np_random
 
         self.current_step_in_episode = 0
         self._reset_landing_state_vars()
-        self.simulation.reset() # Clears history in JSBSim
         self._set_initial_conditions(rng)
 
-        # Initialize observation buffer
         self.obs_buffer.clear()
-        raw_state_init = self._get_raw_jsbsim_state() # Get state after ICs and stabilization
+        raw_state_init = self._get_raw_jsbsim_state()
         initial_single_obs = self._get_observation(raw_state_init)
 
-        # For reward shaping (distance progress)
-        self.prev_dist_to_thresh_nm = initial_single_obs[OBS_FEATURE_NAMES.index("distance_to_threshold_nm")] + 1.0 # Ensure first step can show progress
+        # Ensure OBS_FEATURE_NAMES is accessible here
+        self.prev_dist_to_thresh_nm = initial_single_obs[
+            OBS_FEATURE_NAMES.index("distance_to_threshold_nm")
+        ] + 1.0
 
-        for _ in range(self.num_stacked_frames):
+        for _ in range(self.num_stacked_frames): # Or NUM_STACKED_FRAMES if global
             self.obs_buffer.append(np.copy(initial_single_obs))
 
-        return np.array(self.obs_buffer, dtype=np.float32), {"initial_state": initial_single_obs.tolist()}
+        initial_stacked_obs = np.array(self.obs_buffer, dtype=np.float32)
+
+        # --- BEGIN DEBUGGING BLOCK FOR RESET OBSERVATION SPACE ---
+        # Ensure self.observation_space is defined in __init__
+        if not self.observation_space.contains(initial_stacked_obs):
+            print("ERROR IN RESET: Initial observation is NOT within the defined observation space!")
+            for i in range(self.num_stacked_frames): # Or NUM_STACKED_FRAMES if global
+                frame = initial_stacked_obs[i]
+                # Assuming OBS_LOW, OBS_HIGH, OBS_FEATURE_NAMES are accessible
+                single_frame_space = gymnasium.spaces.Box(OBS_LOW, OBS_HIGH, dtype=np.float32)
+                if not single_frame_space.contains(frame):
+                    print(f"  Problem in stacked frame {i}:")
+                    for j, feature_name in enumerate(OBS_FEATURE_NAMES):
+                        val = frame[j]
+                        low = OBS_LOW[j]
+                        high = OBS_HIGH[j]
+                        if not (low <= val <= high):
+                            print(f"    Feature '{feature_name}' (idx {j}) value: {val:.4f} is OUT OF BOUNDS [{low:.4f}, {high:.4f}]")
+            # Uncomment to stop execution immediately when an out-of-bounds observation is detected in reset
+            # raise ValueError("Initial observation from reset() is not within observation_space.")
+        # --- END DEBUGGING BLOCK FOR RESET OBSERVATION SPACE ---
+
+        return initial_stacked_obs, {"initial_state": initial_single_obs.tolist()}
 
 
     def render(self, mode: str = 'human'):
@@ -833,6 +860,30 @@ class F16ILSEnv(gym.Env):
 
 # --- End of F16ILSEnv ---
 
+def wrap_jsbsim(**kwargs):
+    """
+    Factory function to create an instance of JSBSimEnv wrapped with PositionReward.
+
+    Args:
+        **kwargs: Arguments to pass to the JSBSimEnv constructor (e.g., `root`).
+
+    Returns:
+        PositionReward: The wrapped JSBSim environment.
+    """
+    env = F16ILSEnv(**kwargs)
+    return env
+
+# Register the environment with Gymnasium.
+# This allows gym.make("JSBSim-v0") to create the wrapped environment.
+gym.register(
+    id="F16ILSEnv-v0",
+    entry_point="jsbsim_gym.ils_env:wrap_jsbsim", # Assumes this file is jsbsim_gym.py within jsbsim_gym package
+    # If this file is top-level, e.g. 'my_env_file.py', entry_point would be 'my_env_file:wrap_jsbsim'
+    max_episode_steps=1500, # Used by TimeLimit wrapper if not applied manually
+    # Additional arguments for wrap_jsbsim can be passed via kwargs in gym.make
+    # or set as defaults here:
+    # kwargs={'root': '.'} # Example
+)
 
 # Example of how to register and use
 if __name__ == "__main__":
@@ -852,7 +903,7 @@ if __name__ == "__main__":
 
     try:
         # Now you can make the environment using its ID
-        env = gym.make("F16ILSEnv-v0", jsbsim_root='.', render_mode='rgb_array')
+        env = gym.make("F16ILSEnv-v0")
         # For human mode:
         # env = gym.make("F16ILSEnv-v0", jsbsim_root='.', render_mode='human')
 

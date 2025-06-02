@@ -536,7 +536,7 @@ def wrap_jsbsim(**kwargs) -> PositionReward:
 # This allows gym.make("JSBSim-v0") to create the wrapped environment.
 gym.register(
     id="JSBSim-v0",
-    entry_point="jsbsim_gym.jsbsim_gym:wrap_jsbsim", # Assumes this file is jsbsim_gym.py within jsbsim_gym package
+    entry_point="jsbsim_gym.nav_env:wrap_jsbsim", # Assumes this file is jsbsim_gym.py within jsbsim_gym package
     # If this file is top-level, e.g. 'my_env_file.py', entry_point would be 'my_env_file:wrap_jsbsim'
     max_episode_steps=1200, # Used by TimeLimit wrapper if not applied manually
     # Additional arguments for wrap_jsbsim can be passed via kwargs in gym.make
