@@ -1,7 +1,8 @@
-import gymnasium as gym
-import jsbsim_gym.jsbsim_gym 
+import gym #TESTING OLD GYM FOR RENDERING
+#import gymnasium as gym
+import jsbsim_gym.nav_env 
 from os import path
-from jsbsim_gym.LMA_features import StackedLMAFeaturesExtractor
+from jsbsim_gym.features.LMA_features import StackedLMAFeaturesExtractor
 from stable_baselines3 import SAC, PPO # Import both SAC and PPO
 import torch 
 import argparse 

@@ -1,5 +1,7 @@
-import gymnasium as gym # Use Gymnasium
-import jsbsim_gym.jsbsim_gym # This line makes sure the environment is registered
+import gym # TESTING OLD GYM FOR RENDERING
+#import gymnasium as gym # Use Gymnasium
+import jsbsim_gym.nav_env
+import jsbsim_gym.ils_env # This line makes sure the environment is registered
 import imageio as iio
 from os import path
 from stable_baselines3 import PPO # Assuming you are only visualizing a PPO model)
@@ -17,7 +19,8 @@ video_gif_path = path.join(current_script_dir, "video.gif")
 print(f"Attempting to create environment JSBSim-v0...")
 
 try:
-    env = gym.make("JSBSim-v0") # If wrap_jsbsim takes kwargs, pass them here if needed
+    env = gym.make("F16ILSEnv-v0")
+    #env = gym.make("JSBSim-v0") # If wrap_jsbsim takes kwargs, pass them here if needed
     print("Environment created successfully.")
 except Exception as e:
     print(f"Error creating environment: {e}")
