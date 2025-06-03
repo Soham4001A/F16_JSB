@@ -1,5 +1,4 @@
 import gymnasium as gym
-#import gym
 import jsbsim_gym.ils_env 
 from jsbsim_gym.features.ils_features import StackedLMA_ILS_FeaturesExtractor # Corrected import
 

@@ -1,10 +1,10 @@
-import gym # TESTING OLD GYM FOR RENDERING
-#import gymnasium as gym # Use Gymnasium
+#import gym # TESTING OLD GYM FOR RENDERING
+import gymnasium as gym # Use Gymnasium
 import jsbsim_gym.nav_env
 import jsbsim_gym.ils_env # This line makes sure the environment is registered
 import imageio as iio
 from os import path
-from stable_baselines3 import PPO # Assuming you are only visualizing a PPO model)
+from stable_baselines3 import SAC # Assuming you are only visualizing a PPO model)
 
 
 # NOTE: VISUALIZATION IS CURRENTLY BROKEN FOR THE gymnasium port - work in progress...
@@ -12,14 +12,14 @@ from stable_baselines3 import PPO # Assuming you are only visualizing a PPO mode
 
 # --- Get the directory of the current script ---
 current_script_dir = path.dirname(path.abspath(__file__))
-model_path = path.join(current_script_dir, "models", "jsbsim_am_ppo_stacked_lma")
+model_path = path.join(current_script_dir, "models_ils", "f16ils_sac_stacked_lma_seed1")
 video_mp4_path = path.join(current_script_dir, "video.mp4")
 video_gif_path = path.join(current_script_dir, "video.gif")
 
 print(f"Attempting to create environment JSBSim-v0...")
 
 try:
-    env = gym.make("F16ILSEnv-v0")
+    env = gym.make("Boeing737ILSEnv-v0", render_mode='rgb_array') # Use the correct environment name
     #env = gym.make("JSBSim-v0") # If wrap_jsbsim takes kwargs, pass them here if needed
     print("Environment created successfully.")
 except Exception as e:
@@ -28,7 +28,7 @@ except Exception as e:
 
 print(f"Loading model from: {model_path}")
 try:
-    model = PPO.load(model_path, env=env)
+    model = SAC.load(model_path, env=env)
     print("Model loaded successfully.")
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -46,7 +46,8 @@ try:
         truncated = False
         total_reward = 0
         num_steps = 0
-
+        #env.render_mode = 'rgb_array'
+        
         print("Starting episode...")
         for step_count in range(env.spec.max_episode_steps + 50 if env.spec else 1250): # Run for a bit
             num_steps += 1
