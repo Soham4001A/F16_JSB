@@ -1,6 +1,6 @@
 import gymnasium as gym
 #import gym
-import jsbsim_gym.ils_env # This will run the gym.register in f16_ils_env.py
+import jsbsim_gym.ils_env 
 from jsbsim_gym.features.ils_features import StackedLMA_ILS_FeaturesExtractor # Corrected import
 
 from os import path
@@ -137,8 +137,8 @@ def main(args_cli):
     env.close() # Close the environment after training
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train SAC or PPO/AM-PPO on F16ILSEnv.")
-    parser.add_argument("--env_id", type=str, default="F16ILSEnv-v0", help="Gymnasium Environment ID") # MODIFIED HERE
+    parser = argparse.ArgumentParser(description="Train SAC or PPO/AM-PPO on Boeing737ILSEnv.")
+    parser.add_argument("--env_id", type=str, default="Boeing737ILSEnv-v0", help="Gymnasium Environment ID") # MODIFIED HERE
     parser.add_argument("--render_mode", type=str, default=None, choices=[None, "human", "rgb_array"], help="Render mode for environment")
 
     parser.add_argument("--algorithm", type=str, default="sac", choices=["sac", "ppo"])

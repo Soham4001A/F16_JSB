@@ -1,0 +1,31 @@
+<!-- ils_start_template.xml -->
+<initialize name="ILSCustomStart">
+  <latitude unit="DEG">  {LATITUDE_DEG}  </latitude>
+  <longitude unit="DEG"> {LONGITUDE_DEG} </longitude>
+  <altitude unit="FT">   {ALTITUDE_FT}   </altitude>
+  <vc unit="KTS">        {VC_KTS}        </vc>      <!-- Calibrated Airspeed -->
+  <!-- <vt unit="FT/SEC">   {VT_FPS} </vt> -->     <!-- Or True Airspeed -->
+  <gamma unit="DEG">     {GAMMA_DEG}     </gamma>   <!-- Flight Path Angle -->
+  <phi unit="DEG">       {PHI_DEG}       </phi>
+  <theta unit="DEG">     {THETA_DEG}     </theta>
+  <psi unit="DEG">       {PSI_DEG}       </psi>
+  <beta unit="DEG">      0.0             </beta>
+
+  <!-- Engine running command -->
+  <running> -1 </running> <!-- This sets propulsion/set-running = -1 -->
+  <!-- Explicitly set N2 to idle for both engines for CFM56 -->
+  <!-- You'll need to confirm exact property name if just <n2> doesn't work -->
+  <property>propulsion/engine[0]/n2</property><value>{N2_IDLE_PERCENT}</value>
+  <property>propulsion/engine[1]/n2</property><value>{N2_IDLE_PERCENT}</value>
+  <!-- Set throttle to approach/idle -->
+  <property>fcs/throttle-cmd-norm[0]</property><value>{THROTTLE_CMD}</value>
+  <property>fcs/throttle-cmd-norm[1]</property><value>{THROTTLE_CMD}</value>
+
+  <!-- Configuration -->
+  <property>fcs/flap-cmd-norm</property><value>{FLAP_CMD_NORM}</value>
+  <property>gear/gear-cmd-norm</property><value>1.0</value> <!-- Gear Down -->
+
+  <!-- Optional: Tell JSBSim to trim the aircraft for these conditions -->
+  <!-- <trim mode=" Longitudinal_Trim">1</trim> -->
+  <!-- <trim mode="Full_Trim">1</trim> -->
+</initialize>
