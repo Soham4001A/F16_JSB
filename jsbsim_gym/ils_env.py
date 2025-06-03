@@ -23,7 +23,8 @@ EPSILON = 1e-5
 
 # JSBSim properties for the 737 ILS approach
 ILS_STATE_PROPERTIES_737 = [
-    "position/lat-geod-rad", "position/lon-geoc-rad", "position/h-sl-ft", "position/h-agl-ft",
+    "position/lat-geod-rad", "position/long-gc-deg",  # Use consistent geodetic
+    "position/h-sl-ft", "position/h-agl-ft",
     "attitude/phi-rad", "attitude/theta-rad", "attitude/psi-rad",
     "velocities/vias-kts", "velocities/h-dot-fps", "aero/alpha-deg",
     "velocities/p-rad_sec", "velocities/q-rad_sec", "velocities/r-rad_sec",
@@ -35,7 +36,7 @@ ILS_STATE_PROPERTIES_737 = [
 
 # Indices for key properties
 IDX_LAT_RAD = ILS_STATE_PROPERTIES_737.index("position/lat-geod-rad")
-IDX_LON_RAD = ILS_STATE_PROPERTIES_737.index("position/lon-geoc-rad")
+IDX_LON_RAD = ILS_STATE_PROPERTIES_737.index("position/long-gc-deg")
 IDX_ALT_MSL_FT = ILS_STATE_PROPERTIES_737.index("position/h-sl-ft")
 IDX_ALT_AGL_FT = ILS_STATE_PROPERTIES_737.index("position/h-agl-ft")
 IDX_ROLL_RAD = ILS_STATE_PROPERTIES_737.index("attitude/phi-rad")
@@ -61,17 +62,17 @@ NUM_OBS_FEATURES = len(OBS_FEATURE_NAMES)
 # TODO_737: WIDEN these bounds significantly for delta_loc, delta_gs, distance_to_threshold
 # if starting from a JSBSim default location that could be far from the runway.
 OBS_LOW = np.array([
-    -180.0, -90.0, -50.0, -70.0, # delta_loc, delta_gs can be very large
-    (-20.0 * DEGREES_TO_RADIANS)-EPSILON, (-45.0 * DEGREES_TO_RADIANS)-EPSILON,
-    -np.pi - EPSILON, -10.0, -5.0,
-    (-np.pi/4)-EPSILON, (-np.pi/4)-EPSILON, 0.0, # Min distance is 0
+    -10.0, -5.0, -30.0, -50.0,  # Reasonable ILS deviations for approach
+    (-15.0 * DEGREES_TO_RADIANS), (-30.0 * DEGREES_TO_RADIANS),
+    -np.pi, 0.0, -5.0,
+    (-np.pi/6), (-np.pi/6), 0.0,
 ], dtype=np.float32)
 
 OBS_HIGH = np.array([
-    180.0, 90.0, 50.0, 30.0,
-    (25.0 * DEGREES_TO_RADIANS)+EPSILON, (45.0 * DEGREES_TO_RADIANS)+EPSILON,
-    np.pi + EPSILON, 40000.0, 20.0, # Max altitude, max AoA
-    (np.pi/4)+EPSILON, (np.pi/4)+EPSILON, 1000.0, # Max distance can be large
+    10.0, 5.0, 30.0, 20.0,      # Reasonable ILS deviations for approach  
+    (20.0 * DEGREES_TO_RADIANS), (30.0 * DEGREES_TO_RADIANS),
+    np.pi, 5000.0, 15.0,
+    (np.pi/6), (np.pi/6), 20.0,  # Max 20 NM distance
 ], dtype=np.float32)
 
 
@@ -158,90 +159,94 @@ class Boeing737ILSEnv(gymnasium.Env):
         self.roll_at_main_touchdown_rad=0.0; self.loc_dev_at_main_touchdown_deg=0.0
         self.is_flare_active=False; self.successfully_landed=False
 
-    def _set_initial_conditions(self, rng): # Renamed for clarity
-        #print("[IC DEBUG 737 - Default Location Strategy]")
-
-        # --- Engine Start & Set for Approach ---
-        self.simulation.set_property_value('propulsion/engine[0]/set_running', 1)
-        self.simulation.set_property_value('propulsion/engine[1]/set_running', 1)
-        # Attempt to set N2 near idle to ensure core is running, N1 will follow with throttle
-        self.simulation.set_property_value("propulsion/engine[0]/n2", self.CFM56_IDLE_N2_PERCENT)
-        self.simulation.set_property_value("propulsion/engine[1]/n2", self.CFM56_IDLE_N2_PERCENT)
-        # Set a throttle command that should result in approach N1 (e.g., self.CFM56_APPROACH_N1_TARGET)
-        # This requires knowing how fcs/throttle-cmd-norm maps to N1 for CFM56.
-        # For now, use a fairly high fixed throttle setting.
-        APPROACH_THROTTLE_CMD = 0.55 + rng.uniform(-0.05, 0.05) # Guess for approach power
-        self.simulation.set_property_value("fcs/throttle-cmd-norm[0]", APPROACH_THROTTLE_CMD)
-        self.simulation.set_property_value("fcs/throttle-cmd-norm[1]", APPROACH_THROTTLE_CMD)
-
-        self.simulation.set_property_value("fcs/brake-parking-cmd-norm", 0.0)
-        self.simulation.set_property_value("fcs/left-brake-cmd-norm", 0.0) 
-        self.simulation.set_property_value("fcs/right-brake-cmd-norm", 0.0)
-
-        # --- Target State: Airborne, at a JSBSim default Lat/Lon, but desired Alt/Speed/Hdg for ILS start ---
-        # DO NOT SET 'ic/lat-geod-deg' or 'ic/long-gc-deg'
-        # Let JSBSim place it at its default lat/lon.
-
-        # Start at a reasonable altitude for ILS intercept from a distance
-        # e.g., 3000-7000 ft AGL relative to our target runway (ILS origin) elevation
-        # This requires knowing the aircraft's *actual* starting ground elevation if it's not 0 MSL.
-        # For simplicity, let's set a high MSL altitude.
-        target_start_alt_msl_ft = self.runway_alt_m * METERS_TO_FEET + rng.uniform(4000, 7000)
-
-        target_start_ias_kts = self.target_approach_ias_kts + rng.uniform(20, 40) # Start faster, will slow down
-        target_vc_kts = target_start_ias_kts
-
-        # Heading: Randomly offset from runway heading, to simulate intercepting the localizer
-        # Could be from any quadrant, or biased to be generally behind the localizer
-        random_hdg_offset_deg = rng.uniform(-60, 60) # Intercept from +/- 60 deg off runway reciprocal
-        target_hdg_deg = (self.runway_hdg_rad * RADIANS_TO_DEGREES + 180.0 + random_hdg_offset_deg) % 360.0
+    def _set_initial_conditions(self, rng):
+        """Fixed initial conditions that properly position aircraft for ILS approach"""
         
-        target_gamma_deg = -1.0 + rng.uniform(-1.0, 0.5) # Slight descent or level
-        target_alpha_deg = 3.0 + rng.uniform(-1.0, 1.0) # Typical cruise/descent AoA
-        target_theta_deg = target_alpha_deg + target_gamma_deg
-
-        #print(f"[IC DEBUG 737 DefLoc] Attempting ICs (NO LAT/LON SET): alt={target_start_alt_msl_ft:.1f}, vc={target_vc_kts:.1f}, hdg={target_hdg_deg:.1f}")
-
-        self.simulation.set_property_value('ic/h-sl-ft', target_start_alt_msl_ft)
-        self.simulation.set_property_value('ic/vc-kts', target_vc_kts)
-        self.simulation.set_property_value('ic/gamma-deg', target_gamma_deg)
-        self.simulation.set_property_value('ic/alpha-deg', target_alpha_deg)
-        self.simulation.set_property_value('ic/beta-deg', 0.0)
-        self.simulation.set_property_value('ic/phi-deg', 0.0 + rng.uniform(-5,5))
-        self.simulation.set_property_value('ic/theta-deg', target_theta_deg)
+        # 1. FIX: Properly set initial position relative to runway
+        # Calculate a reasonable starting position for ILS intercept
+        approach_distance_nm = rng.uniform(8, 15)  # 8-15 NM from runway
+        approach_distance_m = approach_distance_nm * NM_TO_METERS
+        
+        # Position aircraft on extended centerline or offset for intercept
+        intercept_angle_deg = rng.uniform(-30, 30)  # Intercept angle
+        intercept_angle_rad = intercept_angle_deg * DEGREES_TO_RADIANS
+        
+        # Calculate initial lat/lon relative to runway
+        # Back up along the runway centerline, then offset laterally
+        runway_back_bearing_rad = self.runway_hdg_rad + np.pi
+        
+        # Initial position along extended centerline
+        delta_east_m = approach_distance_m * math.sin(runway_back_bearing_rad)
+        delta_north_m = approach_distance_m * math.cos(runway_back_bearing_rad)
+        
+        # Add lateral offset for intercept scenario
+        lateral_offset_m = rng.uniform(-2000, 2000)  # ±2km lateral offset
+        delta_east_m += lateral_offset_m * math.cos(runway_back_bearing_rad)
+        delta_north_m += -lateral_offset_m * math.sin(runway_back_bearing_rad)
+        
+        # Convert to lat/lon
+        delta_lat_rad = delta_north_m / EARTH_RADIUS_METERS
+        delta_lon_rad = delta_east_m / (EARTH_RADIUS_METERS * math.cos(self.runway_lat_rad))
+        
+        initial_lat_deg = (self.runway_lat_rad + delta_lat_rad) * RADIANS_TO_DEGREES
+        initial_lon_deg = (self.runway_lon_rad + delta_lon_rad) * RADIANS_TO_DEGREES
+        
+        # 2. FIX: Set proper initial conditions
+        target_alt_msl_ft = self.runway_alt_m * METERS_TO_FEET + rng.uniform(2000, 4000)
+        target_ias_kts = self.target_approach_ias_kts + rng.uniform(10, 30)
+        
+        # Initial heading for intercept
+        if abs(intercept_angle_deg) < 5:  # Nearly aligned
+            target_hdg_deg = self.runway_hdg_rad * RADIANS_TO_DEGREES + rng.uniform(-10, 10)
+        else:  # Intercept scenario
+            target_hdg_deg = (self.runway_hdg_rad * RADIANS_TO_DEGREES + intercept_angle_deg) % 360
+        
+        # 3. FIX: Actually set the lat/lon in JSBSim
+        self.simulation.set_property_value('ic/lat-geod-deg', initial_lat_deg)
+        self.simulation.set_property_value('ic/long-gc-deg', initial_lon_deg)
+        self.simulation.set_property_value('ic/h-sl-ft', target_alt_msl_ft)
+        self.simulation.set_property_value('ic/vc-kts', target_ias_kts)
         self.simulation.set_property_value('ic/psi-true-deg', target_hdg_deg)
         
-        # TODO_737: Flap setting for this phase (might be clean or takeoff/initial approach flaps)
-        initial_flap_setting = 0.125 # Example: Flaps 5 (less drag for initial navigation)
-        self.simulation.set_property_value("fcs/flap-cmd-norm", initial_flap_setting)
-        self.simulation.set_property_value("gear/gear-cmd-norm", 0.0)  # Gear UP for initial navigation phase
-        self.simulation.set_property_value("fcs/speedbrake-cmd-norm", 0.0)
+        # Set reasonable flight path angle
+        target_gamma_deg = rng.uniform(-3.0, -0.5)  # Slight descent
+        target_alpha_deg = rng.uniform(2.0, 4.0)    # Reasonable AoA
+        target_theta_deg = target_alpha_deg + target_gamma_deg
         
-        self.simulation.set_property_value("simulation/init_trim", 1) # Trim for this airborne state
-
-        #print("[IC DEBUG 737 DefLoc] Running run_ic()...")
-        if not self.simulation.run_ic(): print("[IC DEBUG ERROR 737 DefLoc] run_ic() failed.")
+        self.simulation.set_property_value('ic/gamma-deg', target_gamma_deg)
+        self.simulation.set_property_value('ic/alpha-deg', target_alpha_deg)
+        self.simulation.set_property_value('ic/theta-deg', target_theta_deg)
+        self.simulation.set_property_value('ic/phi-deg', rng.uniform(-3, 3))
+        self.simulation.set_property_value('ic/beta-deg', 0.0)
+        
+        # 4. FIX: Proper engine initialization
+        # Don't try to set N1/N2 directly - set throttle and let engine model respond
+        approach_throttle = rng.uniform(0.4, 0.6)  # Reasonable approach power
+        self.simulation.set_property_value("fcs/throttle-cmd-norm[0]", approach_throttle)
+        self.simulation.set_property_value("fcs/throttle-cmd-norm[1]", approach_throttle)
+        
+        # Start engines properly
+        self.simulation.set_property_value('propulsion/engine[0]/set_running', 1)
+        self.simulation.set_property_value('propulsion/engine[1]/set_running', 1)
+        
+        # 5. FIX: Proper configuration for approach
+        self.simulation.set_property_value("fcs/flap-cmd-norm", 0.25)  # Approach flaps
+        self.simulation.set_property_value("gear/gear-cmd-norm", 1.0)  # Gear down for approach
+        self.simulation.set_property_value("fcs/speedbrake-cmd-norm", 0.0)
+        self.simulation.set_property_value("fcs/brake-parking-cmd-norm", 0.0)
+        
+        # Initialize and trim
+        self.simulation.set_property_value("simulation/init_trim", 1)
+        if not self.simulation.run_ic():
+            print("[ERROR] JSBSim run_ic() failed!")
+            return False
         self.simulation.set_property_value("simulation/init_trim", 0)
-
-        #print("[IC DEBUG 737 DefLoc] Stabilization (30 steps)...")
-        for i in range(30):
+        
+        # Stabilization runs
+        for _ in range(50):
             self.simulation.run()
-            if i % 10 == 0:
-                try:
-                    ias = self.simulation.get_property_value("velocities/vias-kts")
-                    n1_0 = self.simulation.get_property_value("propulsion/engine[0]/n1")
-                    n2_0 = self.simulation.get_property_value("propulsion/engine[0]/n2")
-                    lon = self.simulation.get_property_value("position/long-gc-rad") * RADIANS_TO_DEGREES
-                    lat = self.simulation.get_property_value("position/lat-geod-rad") * RADIANS_TO_DEGREES
-                    alt = self.simulation.get_property_value("position/h-sl-ft")
-                    thrust0 = self.simulation.get_property_value("propulsion/engine[0]/thrust-lbs")
-                    #print(f"[IC DEBUG 737 DefLoc] Stab {i}: IAS={ias:.1f} N1={n1_0:.1f} N2={n2_0:.1f} Thrust0={thrust0:.1f} Lat={lat:.4f} Lon={lon:.4f} Alt={alt:.1f}")
-                except Exception as e: print(f"[IC DEBUG 737 DefLoc] Error in stab print: {e}")
-
-        current_raw_state = self._get_raw_jsbsim_state()
-        actual_lon_gc = current_raw_state[IDX_LON_RAD] * RADIANS_TO_DEGREES
-        actual_ias = current_raw_state[IDX_VIAS_KTS]
-        #print(f"[IC DEBUG 737 DefLoc] Actual state post-init: Lon_GC={actual_lon_gc:.4f}, IAS={actual_ias:.1f}")
+        
+        return True
 
     def reset(self, seed: int = None, options: dict = None):
         super().reset(seed=seed)
@@ -278,9 +283,15 @@ class Boeing737ILSEnv(gymnasium.Env):
         return state_values
 
     def _calculate_ils_deviations_and_distances(self, raw_state: np.ndarray):
-        ac_lat_rad = raw_state[IDX_LAT_RAD]; ac_lon_rad = raw_state[IDX_LON_RAD]
-        ac_alt_msl_ft = raw_state[IDX_ALT_MSL_FT]; ac_hdg_rad = normalize_angle_0_2pi(raw_state[IDX_HEADING_RAD])
-        east_m, north_m, _ = geodetic_to_enu(ac_lat_rad, ac_lon_rad, ac_alt_msl_ft*FEET_TO_METERS, self.runway_lat_rad, self.runway_lon_rad, self.runway_alt_m)
+        ac_lat_rad = raw_state[IDX_LAT_RAD]
+        ac_lon_deg = raw_state[IDX_LON_RAD]  # This is in degrees!
+        ac_lon_rad = ac_lon_deg * DEGREES_TO_RADIANS  # Convert to radians
+        ac_alt_msl_ft = raw_state[IDX_ALT_MSL_FT]
+        ac_hdg_rad = normalize_angle_0_2pi(raw_state[IDX_HEADING_RAD])
+        east_m, north_m, _ = geodetic_to_enu(
+            ac_lat_rad, ac_lon_rad, ac_alt_msl_ft*FEET_TO_METERS,
+            self.runway_lat_rad, self.runway_lon_rad, self.runway_alt_m
+        )
         dist_to_thresh_m_2d = math.sqrt(east_m**2 + north_m**2)
         dist_to_thresh_nm = dist_to_thresh_m_2d * METERS_TO_NM
         delta_loc_deg, delta_gs_deg = 0.0, 0.0
@@ -308,6 +319,7 @@ class Boeing737ILSEnv(gymnasium.Env):
             hdg_err, raw_state[IDX_ALT_AGL_FT], raw_state[IDX_AOA_DEG],
             raw_state[IDX_PITCH_RATE_RAD_S], raw_state[IDX_ROLL_RATE_RAD_S], dist_nm
         ], dtype=np.float32)
+        # print(f"[OBS] {obs_features}")  # <-- Add this line to print the observation features
         assert len(obs_features) == NUM_OBS_FEATURES, "Obs feature count mismatch"
         obs_features_clipped = np.clip(obs_features, OBS_LOW, OBS_HIGH)
         return obs_features_clipped
@@ -337,52 +349,62 @@ class Boeing737ILSEnv(gymnasium.Env):
             self.nose_gear_contact=True; self.nose_gear_touchdown_time=current_time
         if self.main_gear_contact and self.nose_gear_contact: self.all_gear_contact=True
 
-    def _calculate_reward(self, raw_state: np.ndarray, current_obs_features: np.ndarray):
+    def _calculate_reward(self, raw_state, current_obs_features):
+        """Fixed reward function with proper scaling"""
         reward = 0.0
-        delta_loc_deg=current_obs_features[0]; delta_gs_deg=current_obs_features[1]
-        airspeed_error_kts=current_obs_features[2]; roll_angle_rad=current_obs_features[5]
-        pitch_angle_rad=current_obs_features[4]; aoa_deg=current_obs_features[8]
-        alt_agl_ft=current_obs_features[7]; dist_to_thresh_nm=current_obs_features[11]
-
-        # Reward for reducing distance to threshold if far away
-        if dist_to_thresh_nm > 2.0: # Only when further than 2 NM
-            reward += 0.01 * (self.prev_dist_to_thresh_nm - dist_to_thresh_nm)
-        self.prev_dist_to_thresh_nm = dist_to_thresh_nm # Update for next step
-
-        # Penalties for being off ILS path - make these gentler if starting far
-        loc_penalty_factor = 0.01 if dist_to_thresh_nm > 10.0 else 0.05
-        gs_penalty_factor = 0.01 if dist_to_thresh_nm > 10.0 else 0.05
         
-        loc_tol, gs_tol, spd_tol = 2.0, 1.0, 10.0 # Wider tolerances for initial navigation phase
-        if dist_to_thresh_nm < 10.0: # Stricter tolerances when closer
-            loc_tol, gs_tol, spd_tol = 0.7, 0.3, 7.0
-
-        if abs(delta_loc_deg) > loc_tol: reward -= loc_penalty_factor * (abs(delta_loc_deg) - loc_tol)**1.5
-        if not self.is_flare_active and abs(delta_gs_deg) > gs_tol: reward -= gs_penalty_factor * (abs(delta_gs_deg) - gs_tol)**1.5
-        if abs(airspeed_error_kts) > spd_tol: reward -= 0.01 * (abs(airspeed_error_kts) - spd_tol)**1.5
+        delta_loc_deg = current_obs_features[0]
+        delta_gs_deg = current_obs_features[1] 
+        airspeed_error_kts = current_obs_features[2]
+        dist_to_thresh_nm = current_obs_features[11]
         
-        reward -= 0.02 * (abs(roll_angle_rad)/(30*DEGREES_TO_RADIANS))**2 # Penalize >30 deg roll
-        if alt_agl_ft > self.flare_start_agl_ft + 20:
-             if abs(pitch_angle_rad) > (15*DEGREES_TO_RADIANS): reward -= 0.03 * (abs(pitch_angle_rad)-(15*DEGREES_TO_RADIANS))**2
+        # 8. FIX: Distance-based reward scaling
+        if dist_to_thresh_nm > 10.0:
+            # Far away - focus on navigation towards runway
+            nav_reward = 0.1 * max(0, self.prev_dist_to_thresh_nm - dist_to_thresh_nm)
+            reward += nav_reward
+            
+            # Gentle penalties when far
+            if abs(delta_loc_deg) > 5.0:
+                reward -= 0.01 * (abs(delta_loc_deg) - 5.0)
+            if abs(airspeed_error_kts) > 20.0:
+                reward -= 0.01 * (abs(airspeed_error_kts) - 20.0)
+                
+        elif dist_to_thresh_nm > 3.0:
+            # Medium distance - focus on ILS capture
+            if abs(delta_loc_deg) < 2.0:
+                reward += 0.1  # Reward for being on localizer
+            if abs(delta_gs_deg) < 1.0:
+                reward += 0.1  # Reward for being on glideslope
+                
+            # Progressive penalties
+            reward -= 0.02 * abs(delta_loc_deg)**1.5
+            reward -= 0.02 * abs(delta_gs_deg)**1.5
+            
+        else:
+            # Close to runway - precision approach
+            reward -= 0.05 * abs(delta_loc_deg)**2
+            reward -= 0.05 * abs(delta_gs_deg)**2
+            
+            # Airspeed management
+            if abs(airspeed_error_kts) < 5.0:
+                reward += 0.05
+            else:
+                reward -= 0.02 * abs(airspeed_error_kts)
         
-        max_aoa_approach_737 = 12.0 
-        if not self.is_flare_active and aoa_deg > max_aoa_approach_737 and dist_to_thresh_nm < 10.0 :
-            reward -= 0.05 * (aoa_deg - max_aoa_approach_737)**2
-
-        if alt_agl_ft <= self.flare_start_agl_ft and not self.main_gear_contact: self.is_flare_active = True
-        if self.is_flare_active and not self.main_gear_contact:
-            vs_fps = raw_state[IDX_VS_FPS]
-            if -7.0 < vs_fps < -0.5: reward += 0.2 # Increased reward for good flare sink
-            elif vs_fps >= -0.5: reward -= 0.2
-            else: reward -= 0.05 * abs(vs_fps - (-7.0))**1.5
-            target_flare_pitch_deg_737 = 2.5 
-            if abs(pitch_angle_rad*RADIANS_TO_DEGREES - target_flare_pitch_deg_737) < 2.0: reward += 0.2 # Increased flare pitch reward
-            else: reward -= 0.05 * (abs(pitch_angle_rad*RADIANS_TO_DEGREES - target_flare_pitch_deg_737)-2.0)**2
+        # Always update distance tracking
+        self.prev_dist_to_thresh_nm = dist_to_thresh_nm
         
-        reward -= 0.0005 * np.sum(np.square(self.last_action[0:3])) # Small penalty for control effort (ail,elev,rud)
-        reward -= 0.001 * (self.last_action[3] - 0.5)**2 # Penalize large throttle changes from a mid-point
-
-        return reward # No small keep-alive, rely on progress and success.
+        # Attitude penalties (always applied)
+        roll_rad = current_obs_features[5]
+        pitch_rad = current_obs_features[4]
+        
+        if abs(roll_rad) > 30 * DEGREES_TO_RADIANS:
+            reward -= 0.1 * (abs(roll_rad) - 30 * DEGREES_TO_RADIANS)**2
+        if abs(pitch_rad) > 20 * DEGREES_TO_RADIANS:
+            reward -= 0.1 * (abs(pitch_rad) - 20 * DEGREES_TO_RADIANS)**2
+        
+        return reward
 
     def _check_termination_truncation(self, raw_state: np.ndarray, current_obs_features: np.ndarray):
         terminated, success, failure_reason = False, False, "in_progress"

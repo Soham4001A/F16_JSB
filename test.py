@@ -6,7 +6,6 @@ import imageio as iio
 from os import path
 from stable_baselines3 import SAC # Assuming you are only visualizing a PPO model)
 
-
 # NOTE: VISUALIZATION IS CURRENTLY BROKEN FOR THE gymnasium port - work in progress...
 #       But it does work with the original OpenAI Gym version of JSBSim
 
