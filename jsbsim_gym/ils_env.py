@@ -6,7 +6,7 @@ import math
 import os
 
 # Visualization imports
-from .visualization.rendering import Viewer, load_mesh, load_shader, RenderObject, Grid
+from .visualization.rendering import Viewer, load_mesh, load_shader, RenderObject, Grid, LineSegment
 from .visualization.quaternion import Quaternion
 
 # --- Constants ---
@@ -106,6 +106,9 @@ class Boeing737ILSEnv(gymnasium.Env):
         self.render_mode = render_mode
         self.jsbsim_root = jsbsim_root
         self.aircraft_model = aircraft_model
+        self.aircraft_render_obj = None
+        self.glideslope_render_obj = None
+        self._render_failed = False 
         self.dt_secs = 1.0 / dt_hz
         self.down_sample = max(1, int(round(120 / dt_hz)))
 
@@ -476,178 +479,148 @@ class Boeing737ILSEnv(gymnasium.Env):
             print(f"ERROR IN RESET: Initial obs NOT in space! Initial Single Frame: {initial_single_obs}")
         return initial_stacked_obs, {"initial_state_debug": initial_single_obs.tolist()}
 
-    def render(self): # Signature for Gymnasium 0.26+
-        scale = 1e-3
-        # print(f"[RENDER CALL] Current self.render_mode: {self.render_mode}, Current self._render_failed: {self._render_failed}")
+    def render(self):
+        scale = 1e-5 # Your working scale factor
 
         effective_mode = self.render_mode
         headless_flag = False
 
         if effective_mode == 'human':
-            if "DISPLAY" not in os.environ and not hasattr(os, 'geteuid'): # Basic check, might need refinement for all headless systems
-                # print("[RENDER WARNING] 'human' mode requested, but no DISPLAY. Cannot render visually.")
+            if "DISPLAY" not in os.environ and not hasattr(os, 'geteuid'): # Basic check
                 return None
             headless_flag = False
         elif effective_mode == 'rgb_array':
             headless_flag = True
         else:
-            return None
-
-        # print(f"[RENDER INFO] Effective mode for this call: {effective_mode}, Headless: {headless_flag}")
+            return None # No valid render mode
 
         if self._render_failed:
-            # print("[RENDER INFO] Exiting render call because _render_failed is True (permanent for this episode).")
             return None
 
         if self.viewer is None:
-            # print(f"[RENDER INFO] Viewer is None, attempting initialization (headless={headless_flag})...")
             try:
-                # Pass the determined headless_flag to the Viewer
                 self.viewer = Viewer(1280, 720, headless=headless_flag)
                 
-                # --- Mesh Loading ---
-                # Construct path to visualization subdirectory relative to this env file
                 visualization_dir = os.path.join(os.path.dirname(__file__), "visualization")
+                aircraft_mesh_filename = "737.obj" # Or your F-16 mesh
                 
-                mesh_filename_737 = "737.obj" # Or specific F-16 mesh if that's what you have
-                mesh_path_737 = os.path.join(visualization_dir, mesh_filename_737)
-                if not os.path.exists(mesh_path_737):
-                     # Fallback: try in the same directory as ils_env.py
-                     mesh_path_737 = os.path.join(os.path.dirname(__file__), mesh_filename_737)
-                if not os.path.exists(mesh_path_737):
-                    # Fallback: try CWD (less reliable)
-                    if os.path.exists(mesh_filename_737):
-                        mesh_path_737 = mesh_filename_737
+                mesh_path_aircraft = os.path.join(visualization_dir, aircraft_mesh_filename)
+                if not os.path.exists(mesh_path_aircraft):
+                     mesh_path_aircraft = os.path.join(os.path.dirname(__file__), aircraft_mesh_filename)
+                if not os.path.exists(mesh_path_aircraft):
+                    if os.path.exists(aircraft_mesh_filename): # Check CWD as last resort
+                        mesh_path_aircraft = aircraft_mesh_filename
                     else:
-                        print(f"[RENDER ERROR] CRITICAL: Aircraft mesh '{mesh_filename_737}' not found.")
-                        self._render_failed = True; self.close(); return None # Close viewer if partially created
+                        print(f"[RENDER ERROR] CRITICAL: Aircraft mesh '{aircraft_mesh_filename}' not found.")
+                        self._render_failed = True; self.close(); return None
                 
-                # print(f"[RENDER INFO] Loading aircraft mesh from: {mesh_path_737}")
-                # Ensure self.viewer.ctx and self.viewer.prog are valid before load_mesh
                 if self.viewer.ctx is None or self.viewer.prog is None:
-                    raise RuntimeError("Viewer context or program not initialized before mesh loading.")
+                    raise RuntimeError("Viewer context or default program not initialized before mesh loading.")
 
-                mesh_vao = load_mesh(self.viewer.ctx, self.viewer.prog, mesh_path_737)
-                self.aircraft_render_obj = RenderObject(mesh_vao)
-                self.aircraft_render_obj.transform.scale = 1.0 / 120.0 # Adjust as needed
+                mesh_vao_aircraft = load_mesh(self.viewer.ctx, self.viewer.prog, mesh_path_aircraft)
+                self.aircraft_render_obj = RenderObject(mesh_vao_aircraft)
+                self.aircraft_render_obj.transform.scale = 1.0 / 3.0 # Your working aircraft model scale
                 self.aircraft_render_obj.color = (0.1, 0.2, 0.5)
                 self.viewer.objects.append(self.aircraft_render_obj)
                 
-                # Add Grid (uses self.viewer.unlit program)
                 if self.viewer.unlit is None:
-                     raise RuntimeError("Viewer unlit program not initialized before Grid creation.")
-                self.viewer.objects.append(Grid(self.viewer.ctx, self.viewer.unlit, 81, 50.0 * scale)) # Scale grid spacing
+                     raise RuntimeError("Viewer unlit program not initialized before Grid/Line creation.")
+                self.viewer.objects.append(Grid(self.viewer.ctx, self.viewer.unlit, 41, 5.0))
+
+                # Initialize Glideslope Line Object
+                dummy_p_a = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                dummy_p_b = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+                self.glideslope_render_obj = LineSegment(self.viewer.ctx, self.viewer.unlit, dummy_p_a, dummy_p_b)
+                self.glideslope_render_obj.color = (1.0, 0.8, 0.0) # Orange/Yellow
+                self.viewer.objects.append(self.glideslope_render_obj)
 
             except Exception as e:
                 print(f"[RENDER ERROR] Viewer or asset initialization error: {e}")
                 import traceback; traceback.print_exc()
                 self._render_failed = True
-                self.close() # self.close() should handle self.viewer=None
+                self.close()
                 return None
         
-        if self.viewer is None or self.viewer.ctx is None : # Check if viewer or its context is gone
+        if self.viewer is None or self.viewer.ctx is None : # Double check after init attempt
             self._render_failed = True 
             return None
 
-        # --- State Fetching and Scene Update ---
-        last_raw = self._get_raw_jsbsim_state()
-        ac_lat_rad = last_raw[IDX_LAT_RAD]
-        ac_lon_rad = last_raw[IDX_LON_RAD]
-        ac_alt_msl_ft = last_raw[IDX_ALT_MSL_FT]
+        # --- State Fetching and Aircraft Scene Update ---
+        last_raw_state = self._get_raw_jsbsim_state() # Ensure this method and IDX_ constants are correct
+        ac_lat_rad = last_raw_state[IDX_LAT_RAD]
+        ac_lon_rad = last_raw_state[IDX_LON_RAD]
+        ac_alt_msl_ft = last_raw_state[IDX_ALT_MSL_FT]
         
-        ac_phi_rad = normalize_angle_mpi_pi(last_raw[IDX_ROLL_RAD])
-        ac_theta_rad = normalize_angle_mpi_pi(last_raw[IDX_PITCH_RAD])
-        ac_psi_rad = normalize_angle_0_2pi(last_raw[IDX_HEADING_RAD]) # Yaw [0, 2pi]
+        ac_phi_rad = normalize_angle_mpi_pi(last_raw_state[IDX_ROLL_RAD])
+        ac_theta_rad = normalize_angle_mpi_pi(last_raw_state[IDX_PITCH_RAD])
+        ac_psi_rad = normalize_angle_0_2pi(last_raw_state[IDX_HEADING_RAD])
 
-        # Convert aircraft geodetic to local ENU for rendering position
-        # (e, n, u) relative to runway threshold
         e_m, n_m, u_m = geodetic_to_enu(
             ac_lat_rad, ac_lon_rad, ac_alt_msl_ft * FEET_TO_METERS,
             self.runway_lat_rad, self.runway_lon_rad, self.runway_alt_m
         )
         
-        # Viewer coordinate system: often X-right, Y-up, Z-out-of-screen (or -Z into screen / forward)
-        # JSBSim output: psi is heading from North. ENU: East (X), North (Y), Up (Z)
-        # If viewer X=East, Y=Up, Z=North (Right-handed system for world coords)
-        # Aircraft position in viewer world frame
         aircraft_viewer_pos = np.array([e_m * scale, u_m * scale, n_m * scale], dtype=np.float32)
         self.aircraft_render_obj.transform.position = aircraft_viewer_pos
 
-        # Aircraft rotation:
-        # JSBSim Euler: phi (roll), theta (pitch), psi (yaw/heading from North).
-        # Convert to quaternion. This is orientation of body frame wrt NED or ENU.
-        # If psi from JSBSim is True Heading (angle East of True North):
-        #   A yaw of 0 means aircraft nose points North.
-        #   A yaw of pi/2 means aircraft nose points East.
-        # The quaternion q_body_to_inertial (from e.g. NED) needs to be transformed
-        # to the viewer's coordinate system if body axes differ.
-        # The NavEnv used: q_display = Quaternion(q_jsb.w, -q_jsb.y, -q_jsb.z, q_jsb.x)
-        # This suggests: JSB X (fwd) -> Viewer X_disp, JSB Y (right) -> Viewer -Y_disp, JSB Z (down) -> Viewer -Z_disp
-        # This depends heavily on the mesh's native orientation.
-        # For F16/JSBSim (X-fwd, Y-right, Z-down body axes):
-        # To map to OpenGL (X-right, Y-up, Z-out of screen view, so -Z is fwd):
-        #   JSBSim X (fwd) maps to Viewer -Z (fwd)
-        #   JSBSim Y (right) maps to Viewer X (right)
-        #   JSBSim Z (down) maps to Viewer -Y (up)
-        # This transformation is complex. Let's use the NavEnv's example for q_body_to_inertial directly for now.
-        q_body_to_inertial_jsb_convention = Quaternion.from_euler(ac_phi_rad, ac_theta_rad, ac_psi_rad, mode='XYZ') # Check mode for JSBSim's convention
-        # Assuming the NavEnv's transformation is a good starting point for mesh orientation:
+        q_body_to_world_jsb_convention = Quaternion.from_euler(ac_phi_rad, ac_theta_rad, ac_psi_rad, mode='XYZ')
         self.aircraft_render_obj.transform.rotation = Quaternion(
-            q_body_to_inertial_jsb_convention.w,
-           -q_body_to_inertial_jsb_convention.y, # Swaps/negates based on axis conventions
-           -q_body_to_inertial_jsb_convention.z,
-            q_body_to_inertial_jsb_convention.x
+            q_body_to_world_jsb_convention.w,
+           -q_body_to_world_jsb_convention.y, 
+           -q_body_to_world_jsb_convention.z, 
+            q_body_to_world_jsb_convention.x
         )
 
+        # --- Update Glideslope Line ---
+        if self.glideslope_render_obj:
+            gs_point_a_viewer = np.array([0.0, 0.0, 0.0], dtype=np.float32) 
 
-        # --- Camera Setup (Chase Cam Example) ---
-        # Place camera behind and slightly above the aircraft, looking at it.
-        # Get aircraft's forward vector in viewer world space
-        # This depends on self.aircraft_render_obj.transform.rotation
-        # For simplicity, use heading (psi) to estimate a simplified forward vector for camera positioning.
-        # Viewer world: X=East, Y=Up, Z=North
-        # Aircraft heading psi (0 is North, pi/2 is East)
-        cam_dist_behind = 300 * scale 
-        cam_height_above = 100 * scale
-
-        # Simplified: position camera based on ENU coordinates and psi
-        # Viewer X (East), Y (Up), Z (North)
-        offset_x = -cam_dist_behind * np.sin(ac_psi_rad)  # Behind aircraft along Easting
-        offset_z = -cam_dist_behind * np.cos(ac_psi_rad)  # Behind aircraft along Northing
-        
-        cam_eye_viewer = aircraft_viewer_pos + np.array([offset_x, cam_height_above, offset_z], dtype=np.float32)
-        cam_target_viewer = aircraft_viewer_pos + np.array([0, 20*scale, 0], dtype=np.float32) # Look slightly above aircraft center
-
-        # Calculate rotation quaternion for the camera to look from cam_eye_viewer to cam_target_viewer
-        view_direction = cam_target_viewer - cam_eye_viewer
-        dist_cam_target = np.linalg.norm(view_direction)
-
-        if dist_cam_target < 1e-6:
-            # Default orientation if eye is at target (e.g., looking along -Z axis if that's forward)
-            cam_render_pitch_rad = 0.0
-            cam_render_yaw_rad = 0.0 
-        else:
-            view_direction_normalized = view_direction / dist_cam_target
-            dx_cam, dy_cam, dz_cam = view_direction_normalized # Components in viewer world frame
+            GLIDESLOPE_LINE_VIEWER_LENGTH_HORIZONTAL_PROJECTION = 50.0 
             
-            # Assuming viewer Y is up, X is right, Z is "out of screen" / positive Z towards viewer from origin
-            # (Standard OpenGL lookAt: camera looks along its -Z axis)
-            # Yaw is rotation around global Y axis. Pitch is rotation around camera's local X axis.
-            cam_render_yaw_rad = np.arctan2(dx_cam, dz_cam) # Yaw based on X and Z projection in XZ plane
-            cam_render_pitch_rad = np.arcsin(-dy_cam)       # Pitch based on Y component
+            gs_point_b_up_viewer = GLIDESLOPE_LINE_VIEWER_LENGTH_HORIZONTAL_PROJECTION * math.tan(self.glideslope_rad)
+            approach_hdg_rad = normalize_angle_0_2pi(self.runway_hdg_rad + np.pi)
 
-        # The NavEnv used Quaternion.from_euler(-pitch, yaw, 0, mode=1)
-        # mode=1's exact Euler order for your Quaternion lib is key.
-        # Common for cameras: Yaw (around world Y), then Pitch (around camera's X)
-        camera_rotation_q = Quaternion.from_euler(-cam_render_pitch_rad, cam_render_yaw_rad, 0, mode=1) # Assuming mode=1 is (Pitch, Yaw, Roll) intrinsic on Y,X',Z''
+            gs_point_b_east_viewer = GLIDESLOPE_LINE_VIEWER_LENGTH_HORIZONTAL_PROJECTION * math.sin(approach_hdg_rad)
+            gs_point_b_north_viewer = GLIDESLOPE_LINE_VIEWER_LENGTH_HORIZONTAL_PROJECTION * math.cos(approach_hdg_rad)
+            
+            gs_point_b_viewer = np.array([
+                gs_point_b_east_viewer,
+                gs_point_b_up_viewer,
+                gs_point_b_north_viewer
+            ], dtype=np.float32)
 
+            self.glideslope_render_obj.update_points(gs_point_a_viewer, gs_point_b_viewer)
+
+        # --- Camera Setup ---
+        CAM_EYE_OFFSET_BEHIND_AIRCRAFT = 15.0 
+        CAM_EYE_VERTICAL_OFFSET = 5.0      
+        dir_behind_aircraft_viewer_world = np.array([
+            -math.sin(ac_psi_rad), 0.0, -math.cos(ac_psi_rad)
+        ], dtype=np.float32)
+        cam_eye_position = (
+            aircraft_viewer_pos + 
+            dir_behind_aircraft_viewer_world * CAM_EYE_OFFSET_BEHIND_AIRCRAFT + 
+            np.array([0, CAM_EYE_VERTICAL_OFFSET, 0], dtype=np.float32)
+        )
+        camera_target_on_aircraft = aircraft_viewer_pos + np.array([0, 1.0, 0], dtype=np.float32)
+        look_direction_vec = camera_target_on_aircraft - cam_eye_position
+        dist_look = np.linalg.norm(look_direction_vec)
+        if dist_look > 1e-6: 
+            look_direction_vec /= dist_look
+        else: 
+            look_direction_vec = -dir_behind_aircraft_viewer_world
+        
+        r_cam_x, r_cam_y, r_cam_z = look_direction_vec[0], look_direction_vec[1], look_direction_vec[2]
+        cam_yaw_rad = np.arctan2(-r_cam_x, -r_cam_z)
+        cam_pitch_rad = np.arctan2(-r_cam_y, math.sqrt(r_cam_x**2 + r_cam_z**2 + 1e-9))
+        
         try:
+            camera_rotation_q = Quaternion.from_euler(-cam_pitch_rad, cam_yaw_rad, 0, mode=1) 
             self.viewer.set_view(
-                x=cam_eye_viewer[0], y=cam_eye_viewer[1], z=cam_eye_viewer[2],
+                x=cam_eye_position[0], y=cam_eye_position[1], z=cam_eye_position[2],
                 rotation_quaternion=camera_rotation_q
             )
-            # The Viewer.render() call will draw to its FBO (offscreen if headless)
-            self.viewer.render()
+            self.viewer.render() # Render all objects to the FBO
 
         except Exception as e:
             print(f"[RENDER ERROR] Error during view_set or viewer.render(): {e}")
@@ -659,22 +632,21 @@ class Boeing737ILSEnv(gymnasium.Env):
         if effective_mode == 'rgb_array':
             try:
                 frame = self.viewer.get_frame()
-                if frame is None: # Should not happen with new Viewer if FBO read works
-                    # print("[RENDER WARNING] get_frame() returned None unexpectedly.")
+                if frame is None: # Should ideally not happen if viewer.render() and get_frame() are robust
                     return np.zeros((self.viewer.height, self.viewer.width, 3), dtype=np.uint8)
                 return frame
             except Exception as e:
                 print(f"[RENDER ERROR] Error during self.viewer.get_frame(): {e}")
                 import traceback; traceback.print_exc()
                 self._render_failed = True
-                return None
+                return None # Return None as per Gymnasium spec on error
         
         elif effective_mode == 'human':
-            # In human mode, viewer.render() (called above) updates the Pygame window.
+            # For 'human' mode, viewer.render() (called above) updates the Pygame window.
             # Gymnasium spec is to return None.
             return None 
         
-        return None # Should not be reached if effective_mode is valid
+        return None # Fallback, should not be reached if effective_mode is valid
 
     def close(self):
         if self.viewer: self.viewer.close(); self.viewer = None

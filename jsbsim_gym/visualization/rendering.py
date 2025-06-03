@@ -176,7 +176,41 @@ class RenderObject:
         self.vao.program['model'] = tuple(np.hstack(self.transform.matrix.T))
         self.vao.program['color'] = self.color
         self.vao.render(self.draw_mode)
+class LineSegment(RenderObject):
+    def __init__(self, ctx: mgl.Context, program, point_a: np.ndarray, point_b: np.ndarray):
+        super().__init__(None) # VAO will be created/updated
 
+        self.ctx = ctx
+        self.program = program # Use the same program as the grid (e.g., unlit)
+        self.vertices_np = np.zeros((2, 3), dtype=np.float32) # 2 points, 3 coords (x,y,z)
+        self.vbo = None # Will be created/updated
+        self.update_points(point_a, point_b) # Initial points
+        self.draw_mode = mgl.LINES
+        self.color = (1.0, 1.0, 0.0) # Yellow for glideslope, for example
+
+    def update_points(self, point_a: np.ndarray, point_b: np.ndarray):
+        self.vertices_np[0, :] = point_a.astype(np.float32)
+        self.vertices_np[1, :] = point_b.astype(np.float32)
+
+        if self.vbo:
+            self.vbo.write(self.vertices_np.tobytes())
+        else:
+            self.vbo = self.ctx.buffer(self.vertices_np.tobytes())
+        
+        # VAO needs to be recreated if VBO changes structure or if it's the first time
+        # For simplicity here, if VBO is just updated, we might not need to recreate VAO
+        # if the shader binding ('aPos') remains the same.
+        # However, simple_vertex_array is cheap to call.
+        if self.vao: self.vao.release() # Release old VAO before creating new one
+        self.vao = self.ctx.simple_vertex_array(self.program, self.vbo, 'aPos')
+
+
+    def render(self): # Override to ensure program is set correctly
+        if self.vao is None: return
+        # The LineSegment itself is in world coordinates, so its model matrix is identity
+        self.program['model'].write(np.eye(4, dtype=np.float32).T.tobytes())
+        self.program['color'] = self.color
+        self.vao.render(self.draw_mode)
 class Grid(RenderObject):
     def __init__(self, ctx : mgl.Context, program, n, spacing):
         super().__init__(None) # VAO set later
